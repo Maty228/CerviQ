@@ -24,6 +24,9 @@ data Tile
     | Poison
     deriving (Show, Eq)
 
+
+-- Worm body is never empty for an alive
+-- The first position in wormBody is always the head
 data Worm = Worm
     {
         wormId :: Int,

@@ -46,3 +46,23 @@ applyAction dir GoStraight = dir
 
 nextHeadPosition :: Worm -> Position
 nextHeadPosition worm = moveForward (wormHead worm) (wormDirection worm)
+
+
+
+-- Build a new worm body after moving to a new head position
+-- If the worm grows, the tail is kept, otherwise the last body segment is removed
+advanceBody :: Bool -> Position -> [Position] -> [Position]
+advanceBody grows newHead oldBody
+    | grows = newHead : oldBody
+    | otherwise = newHead : init oldBody
+
+moveWorm :: Bool -> Worm -> Worm
+moveWorm grows worm =
+    worm {wormBody = advanceBody grows (nextHeadPosition worm) (wormBody worm)}
+
+
+moveWormAfterAction :: Bool -> Action -> Worm -> Worm
+moveWormAfterAction grows action worm =
+    let newDirection = applyAction (wormDirection worm) action
+        turnedWorm = worm {wormDirection = newDirection}
+    in moveWorm grows turnedWorm
