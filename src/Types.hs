@@ -1,5 +1,6 @@
 module Types where
 
+import Data.Map (Map)
 
 type Position = (Int, Int)
 
@@ -37,6 +38,13 @@ data Worm = Worm
     deriving (Show, Eq)
 
 
+data GameMap = GameMap
+    {
+        mapWidth :: Int,
+        mapHeight :: Int,
+        mapTiles :: Map Position Tile
+    }
+    deriving (Show, Eq)
 
 data GameState = GameState
     {

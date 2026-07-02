@@ -1,6 +1,7 @@
 module Game where
 
 import Types
+import Maps
 
 turnLeft :: Direction -> Direction
 turnLeft North = West
@@ -33,9 +34,13 @@ Using Image coordination system:
 0,4 1,4 2,4 3,4 4,4
 -}
 
--- Returns the head position of a worm, the first position in wormBody is always considered as the head
+-- Returns the head position of a worm
+-- An alive worm always has a non-empty body and the first position is its head
 wormHead :: Worm -> Position
-wormHead worm = head (wormBody worm)
+wormHead worm = 
+    case wormBody worm of
+        headPosition : _ -> headPosition
+        [] -> error "wormHead: wormBody is empty"
 
 
 applyAction :: Direction -> Action -> Direction
@@ -66,3 +71,16 @@ moveWormAfterAction grows action worm =
     let newDirection = applyAction (wormDirection worm) action
         turnedWorm = worm {wormDirection = newDirection}
     in moveWorm grows turnedWorm
+
+
+
+isBlocked :: GameMap -> Position -> Bool
+isBlocked map pos =
+    case tileAt map pos of
+        Nothing -> True
+        Just tile -> tile == Wall 
+
+
+wouldHitWall :: GameMap -> Worm -> Bool
+wouldHitWall map worm =
+    isBlocked map (nextHeadPosition worm)
