@@ -2,6 +2,7 @@
 
 # Stack build artifacts
 .stack-work/
+.stack-work
 
 # Cabal build artifacts
 /dist/
