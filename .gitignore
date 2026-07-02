@@ -1,0 +1,44 @@
+
+
+# Stack build artifacts
+.stack-work/
+
+# Cabal build artifacts
+/dist/
+/dist-newstyle/
+/cabal-dev/
+
+# Haskell Language Server
+.hie/
+*.hie
+*.hi
+*.o
+
+# GHC environment files
+.ghc.environment.*
+
+# Profiling and debugging output
+*.prof
+*.hp
+*.eventlog
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VSCode
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# Logs
+*.log
