@@ -113,22 +113,22 @@ moveWormAfterAction grows action worm =
 
 
 isBlocked :: GameMap -> Position -> Bool
-isBlocked gameMap pos =
-    case tileAt gameMap pos of
+isBlocked gamemap pos =
+    case tileAt gamemap pos of
         Nothing -> True
         Just tile -> tile == Wall 
 
 
 wouldHitWall :: GameMap -> Worm -> Bool
-wouldHitWall gameMap worm =
-    isBlocked gameMap (nextHeadPosition worm)
+wouldHitWall gamemap worm =
+    isBlocked gamemap (nextHeadPosition worm)
 
 
 wouldHitWallAfterAction :: GameMap -> Action -> Worm -> Bool
-wouldHitWallAfterAction gameMap action worm =
+wouldHitWallAfterAction gamemap action worm =
     let newDirection = applyAction (wormDirection worm) action
         turnedWorm = worm {wormDirection = newDirection}
-    in wouldHitWall gameMap turnedWorm
+    in wouldHitWall gamemap turnedWorm
 
 
 occupiedPositions :: [Worm] -> [Position]
@@ -162,21 +162,52 @@ wormCollidesWithBodies worms worm =
     headCollision (occupiedPositions worms) worm
 
 wormCollidesWithMap :: GameMap -> Worm -> Bool
-wormCollidesWithMap gameMap worm =
-    isBlocked gameMap (wormHead worm)
+wormCollidesWithMap gamemap worm =
+    isBlocked gamemap (wormHead worm)
 
 
 wormCollides :: GameMap -> [Worm] -> Worm -> Bool
-wormCollides gameMap worms worm =
-    wormCollidesWithMap gameMap worm ||
+wormCollides gamemap worms worm =
+    wormCollidesWithMap gamemap worm ||
     wormCollidesWithBodies worms worm
 
 
+
+wormWillEatFood :: GameMap -> Action -> Worm -> Bool
+wormWillEatFood gamemap action worm =
+    let newDirection = applyAction (wormDirection worm) action
+        turnedWorm = worm {wormDirection = newDirection}
+        newHead = nextHeadPosition turnedWorm
+    in isFood gamemap newHead
+
+
+removeEatenFood :: [Worm] -> GameMap -> GameMap
+removeEatenFood worms currentMap = 
+    foldr removeFood currentMap (map wormHead worms)
+
+
+isFreeForFood :: GameState -> Position -> Bool
+isFreeForFood state pos =
+    isEmptyTile stateMap pos &&
+    not (positionOccupied pos wormPositions)
+  where
+    stateMap = gameMap state
+    wormPositions = occupiedPositions (filter wormAlive (gameWorms state))
+
+
+freeFoodPositions :: GameState -> [Position]
+freeFoodPositions state = filter (isFreeForFood state) (allMapPositions (gameMap state))
+
+spawnFoodAt :: Position -> GameState -> GameState
+spawnFoodAt pos state =
+    state {gameMap = placeFood pos (gameMap state)}
+
+
 simulateTurn :: GameMap -> [(Bool, Action, Worm)] -> ([Worm], [Worm])
-simulateTurn gameMap moves =
+simulateTurn gamemap moves =
     let movedWorms = futureWorms moves
-        collidingWorms = filter (wormCollides gameMap movedWorms) movedWorms
-        survivingWorms = filter (not . wormCollides gameMap movedWorms) movedWorms
+        collidingWorms = filter (wormCollides gamemap movedWorms) movedWorms
+        survivingWorms = filter (not . wormCollides gamemap movedWorms) movedWorms
     in (survivingWorms, collidingWorms)
 
 
@@ -201,15 +232,24 @@ playerActionFromInput worm input =
 stepGame :: [(Int, Action)] -> GameState -> GameState
 
 stepGame actions state =
-    let alive = filter wormAlive (gameWorms state)
+    let currentMap = gameMap state
+        alive = filter wormAlive (gameWorms state)
         alreadyDead = filter (not . wormAlive) (gameWorms state)
 
         moves =
             map
-                (\worm -> (False, actionForWorm actions worm, worm))
+                (\worm ->
+                    let action = actionForWorm actions worm
+                        grows = wormWillEatFood currentMap action worm
+                    in (grows, action, worm)
+                )
                 alive
+    
         (survivors, collided) =
-            simulateTurn (gameMap state) moves
+            simulateTurn currentMap moves
+        
+        newMap = removeEatenFood survivors currentMap
+
         updatedWorms =
             map (\worm -> worm {wormAlive = True}) survivors
             ++ map (\worm -> worm {wormAlive = False}) collided
@@ -217,6 +257,7 @@ stepGame actions state =
     in 
         state
             {
+                gameMap = newMap,
                 gameWorms = updatedWorms,
                 gameTick = gameTick state + 1
             }

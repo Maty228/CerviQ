@@ -4,10 +4,38 @@ import Types
 import Game
 import Render
 import TestData
+import Maps
+
+import System.Random (randomRIO)
+import System.Posix.Internals (statGetType)
 
 
 playerWormId :: Int
 playerWormId = 1
+
+maxFoodCount :: Int
+maxFoodCount = 1
+
+
+randomFoodPosition :: GameState -> IO (Maybe Position)
+randomFoodPosition state = do
+    let freePositions = freeFoodPositions state
+    case freePositions of
+        [] -> return Nothing
+        _ -> do 
+            index <- randomRIO (0, length freePositions - 1)
+            return (Just (freePositions !! index))
+
+
+ensureFoodCount :: Int -> GameState -> IO GameState
+ensureFoodCount maxFood state
+    | length (foodPositions (gameMap state)) >= maxFood = return state
+    | otherwise = do
+        maybePosition <- randomFoodPosition state
+        case maybePosition of
+            Nothing -> return state
+            Just position -> ensureFoodCount maxFood (spawnFoodAt position state)
+
 
 
 gameLoop :: GameState -> IO ()
@@ -23,8 +51,11 @@ gameLoop state = do
             input <- getLine
             let action = playerActionFromInput playerWorm input
                 newState = stepGame [(playerWormId, action)] state
-            gameLoop newState
+            stateWithFood <- ensureFoodCount maxFoodCount newState
+            gameLoop stateWithFood
 
 
 main :: IO ()
-main = gameLoop testGame
+main = do
+    initialState <- ensureFoodCount maxFoodCount testGame
+    gameLoop initialState
