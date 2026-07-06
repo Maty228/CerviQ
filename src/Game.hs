@@ -229,8 +229,26 @@ playerActionFromInput worm input =
             Nothing -> GoStraight
         [] -> GoStraight
 
-stepGame :: [(Int, Action)] -> GameState -> GameState
 
+increaseAge :: Worm -> Worm
+increaseAge worm =
+    worm {
+        wormStats =
+            (wormStats worm) {age = age (wormStats worm) + 1}
+    }
+
+increaseFoodEaten :: Worm -> Worm
+increaseFoodEaten worm =
+    worm {
+        wormStats =
+            (wormStats worm) {foodEaten = foodEaten (wormStats worm) + 1}
+    }
+
+wormAteFood :: GameMap -> Worm -> Bool
+wormAteFood currentMap worm =
+    isFood currentMap (wormHead worm)
+
+stepGame :: [(Int, Action)] -> GameState -> GameState
 stepGame actions state =
     let currentMap = gameMap state
         alive = filter wormAlive (gameWorms state)
@@ -250,10 +268,26 @@ stepGame actions state =
         
         newMap = removeEatenFood survivors currentMap
 
+        updatedSurvivors =
+            map
+                (\worm ->
+                    let agedWorm = increaseAge worm
+                    in
+                        if wormAteFood currentMap worm
+                            then increaseFoodEaten agedWorm
+                            else agedWorm
+                )
+                survivors
+
+        updatedCollided =
+            map
+                (\worm ->
+                    (increaseAge worm) { wormAlive = False }
+                )
+                collided
+
         updatedWorms =
-            map (\worm -> worm {wormAlive = True}) survivors
-            ++ map (\worm -> worm {wormAlive = False}) collided
-            ++ alreadyDead
+            updatedSurvivors ++ updatedCollided ++ alreadyDead
     in 
         state
             {

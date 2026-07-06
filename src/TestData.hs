@@ -4,6 +4,14 @@ import Types
 import Maps
 
 
+initialWormStats :: WormStats
+initialWormStats =
+    WormStats
+        { foodEaten = 0
+        , kills = 0
+        , age = 0
+        }
+
 -- | Simple hardcoded map used for development and testing.
 testMap :: GameMap
 testMap = fromAsciiMap
@@ -21,7 +29,8 @@ testWorm = Worm {
     wormId = 1,
     wormBody = [(3,1), (2,1), (1,1)],
     wormDirection = East,
-    wormAlive = True
+    wormAlive = True,
+    wormStats = initialWormStats
 }
 
 testGame :: GameState

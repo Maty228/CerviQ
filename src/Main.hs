@@ -5,16 +5,13 @@ import Game
 import Render
 import TestData
 import Maps
+import Config
 
 import System.Random (randomRIO)
-import System.Posix.Internals (statGetType)
 
 
-playerWormId :: Int
-playerWormId = 1
 
-maxFoodCount :: Int
-maxFoodCount = 1
+
 
 
 randomFoodPosition :: GameState -> IO (Maybe Position)

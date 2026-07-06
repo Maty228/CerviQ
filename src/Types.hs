@@ -33,7 +33,16 @@ data Worm = Worm
         wormId :: Int,
         wormBody :: [Position],
         wormDirection :: Direction,
-        wormAlive :: Bool
+        wormAlive :: Bool,
+        wormStats :: WormStats
+    }
+    deriving (Show, Eq)
+
+data WormStats = WormStats
+    {
+        foodEaten :: Int,
+        kills :: Int,
+        age :: Int
     }
     deriving (Show, Eq)
 
