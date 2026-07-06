@@ -163,3 +163,34 @@ simulateTurn gameMap moves =
         collidingWorms = filter (wormCollides gameMap movedWorms) movedWorms
         survivingWorms = filter (not . wormCollides gameMap movedWorms) movedWorms
     in (survivingWorms, collidingWorms)
+
+
+
+actionForWorm :: [(Int, Action)] -> Worm -> Action
+actionForWorm actions worm =
+    case lookup (wormId worm) actions of
+        Just action -> action
+        Nothing -> GoStraight
+
+stepGame :: [(Int, Action)] -> GameState -> GameState
+
+stepGame actions state =
+    let alive = filter wormAlive (gameWorms state)
+        alreadyDead = filter (not . wormAlive) (gameWorms state)
+
+        moves =
+            map
+                (\worm -> (False, actionForWorm actions worm, worm))
+                alive
+        (survivors, collided) =
+            simulateTurn (gameMap state) moves
+        updatedWorms =
+            map (\worm -> worm {wormAlive = True}) survivors
+            ++ map (\worm -> worm {wormAlive = False}) collided
+            ++ alreadyDead
+    in 
+        state
+            {
+                gameWorms = updatedWorms,
+                gameTick = gameTick state + 1
+            }

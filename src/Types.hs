@@ -48,6 +48,7 @@ data GameMap = GameMap
 
 data GameState = GameState
     {
+        gameMap :: GameMap,
         gameWorms :: [Worm],
         gameTick :: Int
     }

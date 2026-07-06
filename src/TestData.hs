@@ -21,3 +21,12 @@ testWorm = Worm {
     wormDirection = East,
     wormAlive = True
 }
+
+testGame :: GameState
+testGame = 
+    GameState
+        {
+            gameMap = testMap,
+            gameWorms = [testWorm],
+            gameTick = 0
+        }
