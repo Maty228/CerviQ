@@ -28,6 +28,21 @@ moveForward (x,y) South = (x, y+1)
 moveForward (x,y) West = (x-1, y)
 
 
+charToDirection :: Char -> Maybe Direction
+charToDirection 'w' = Just North
+charToDirection 's' = Just South
+charToDirection 'a' = Just West
+charToDirection 'd' = Just East
+charToDirection _ = Nothing
+
+
+directionToAction :: Direction -> Direction -> Maybe Action
+directionToAction current desired
+    | desired == current = Just GoStraight
+    | desired == turnLeft current = Just TurnLeft
+    | desired == turnRight current = Just TurnRight
+    | otherwise = Nothing
+
 
 {-
 Using Image coordination system:
@@ -171,6 +186,17 @@ actionForWorm actions worm =
     case lookup (wormId worm) actions of
         Just action -> action
         Nothing -> GoStraight
+
+
+playerActionFromInput :: Worm -> String -> Action
+playerActionFromInput worm input =
+    case input of
+        c : _ -> case charToDirection c of
+            Just desiredDirection -> case directionToAction (wormDirection worm) desiredDirection of
+                Just action -> action
+                Nothing -> GoStraight
+            Nothing -> GoStraight
+        [] -> GoStraight
 
 stepGame :: [(Int, Action)] -> GameState -> GameState
 
