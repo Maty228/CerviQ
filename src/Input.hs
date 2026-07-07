@@ -2,7 +2,6 @@ module Input where
 
 import Types
 import Movement
-import GHC.IO.Exception (AllocationLimitExceeded)
 
 -- -----------------------------------------------------------------------------
 -- Keyboard input

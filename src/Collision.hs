@@ -4,6 +4,20 @@ import Types
 import Maps
 import Movement
 
+import Data.List (find)
+import Data.Maybe (mapMaybe)
+
+
+-- | Describes why a worm died during a turn.
+data DeathReason
+    = HitWall
+    | HitPoison
+    | HitOwnBody
+    | HitOtherBody Int
+    | HeadToHead [Int]
+    deriving (Show, Eq)
+
+
 -- -----------------------------------------------------------------------------
 -- Map collisions
 -- -----------------------------------------------------------------------------
@@ -82,21 +96,81 @@ wormCollidesWithMap currentMap worm =
     isBlocked currentMap (wormHead worm)
 
 
--- | Checks whether the worm collides with either the map or another worm.
+-- | Checks whether the worm collides with the map or another worm.
 wormCollides :: GameMap -> [Worm] -> Worm -> Bool
 wormCollides currentMap worms worm =
-    wormCollidesWithMap currentMap worm ||
-    wormCollidesWithBodies worms worm
+    case deathReason currentMap worms worm of
+        Just _ -> True
+        Nothing -> False
+
+-- | Returns the worm body without its head.
+bodyWithoutHead :: Worm -> [Position]
+bodyWithoutHead worm =
+    case wormBody worm of
+        [] -> []
+        _ : body -> body
 
 
 -- -----------------------------------------------------------------------------
 -- Turn simulation
 -- -----------------------------------------------------------------------------
 
--- | Simulates one game turn and separates surviving and colliding worms.
-simulateTurn :: GameMap -> [(Bool, Action, Worm)] -> ([Worm], [Worm])
+-- | Returns the first worm whose body contains the given position.
+bodyOwnerAt :: Position -> [Worm] -> Maybe Worm
+bodyOwnerAt pos worms =
+    find (\worm -> pos `elem` bodyWithoutHead worm) worms
+
+
+-- | Returns IDs of other worms whose heads are on the same position.
+headToHeadIds :: [Worm] -> Worm -> [Int]
+headToHeadIds worms worm =
+    [ wormId other
+    | other <- worms
+    , wormId other /= wormId worm
+    , wormHead other == wormHead worm
+    ]
+
+
+-- | Determines whether the given moved worm died and why.
+deathReason :: GameMap -> [Worm] -> Worm -> Maybe (Worm, DeathReason)
+deathReason currentMap worms worm
+    | isBlocked currentMap headPos =
+        Just (worm, HitWall)
+
+    | isPoison currentMap headPos =
+        Just (worm, HitPoison)
+
+    | headPos `elem` bodyWithoutHead worm =
+        Just (worm, HitOwnBody)
+
+    | not (null headHits) =
+        Just (worm, HeadToHead (wormId worm : headHits))
+
+    | otherwise =
+        case bodyOwnerAt headPos otherWorms of
+            Just killer ->
+                Just (worm, HitOtherBody (wormId killer))
+
+            Nothing ->
+                Nothing
+  where
+    headPos = wormHead worm
+
+    otherWorms =
+        filter (\other -> wormId other /= wormId worm) worms
+
+    headHits =
+        headToHeadIds worms worm
+
+
+-- | Simulates one game turn and separates surviving worms from deaths.
+simulateTurn :: GameMap -> [(Bool, Action, Worm)] -> ([Worm], [(Worm, DeathReason)])
 simulateTurn currentMap moves =
     let movedWorms = futureWorms moves
-        collidingWorms = filter (wormCollides currentMap movedWorms) movedWorms
-        survivingWorms = filter (not . wormCollides currentMap movedWorms) movedWorms
-    in (survivingWorms, collidingWorms)
+        deaths = mapMaybe (deathReason currentMap movedWorms) movedWorms
+        deadIds = map (wormId . fst) deaths
+        survivingWorms =
+            filter
+                (\worm -> wormId worm `notElem` deadIds)
+                movedWorms
+    in (survivingWorms, deaths)

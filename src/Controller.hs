@@ -16,7 +16,7 @@ import Types
 -- * only AI controllers means automatic simulation.
 controllers :: [(Int, Controller)]
 controllers = 
-    [ (1, AI safeRandomAgent)
+    [ (1, AI safeHunterAgent)
     , (2, AI safeGreedyFoodAgent)
 
     ]

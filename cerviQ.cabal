@@ -28,6 +28,7 @@ executable cerviQ
     Agent
     Config
     Maps
+    Evaluation
     QLearning
     Render
     Training

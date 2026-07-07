@@ -5,6 +5,8 @@ import Maps
 import Movement
 import Collision
 
+import System.Random (randomRIO)
+
 -- -----------------------------------------------------------------------------
 -- Food handling
 -- -----------------------------------------------------------------------------
@@ -90,6 +92,65 @@ wormAteFood currentMap worm =
     isFood currentMap (wormHead worm)
 
 
+-- | Increases the number of kills by the given amount.
+increaseKills :: Int -> Worm -> Worm
+increaseKills amount worm =
+    worm
+        { wormStats =
+            (wormStats worm)
+                { kills = kills (wormStats worm) + amount }
+        }
+
+
+-- | Extracts the killer ID from a death reason, if there is one.
+killerFromDeath :: (Worm, DeathReason) -> Maybe Int
+killerFromDeath (_, HitOtherBody killerId) = Just killerId
+killerFromDeath _ = Nothing
+
+
+-- | Counts how many kills should be awarded to the given worm.
+killCountForWorm :: [Int] -> Worm -> Int
+killCountForWorm killerIds worm =
+    length (filter (== wormId worm) killerIds)
+
+
+-- | Applies kill rewards to a worm.
+applyKillStats :: [Int] -> Worm -> Worm
+applyKillStats killerIds worm =
+    increaseKills (killCountForWorm killerIds worm) worm
+
+
+-- -----------------------------------------------------------------------------
+-- Food spawning
+-- -----------------------------------------------------------------------------
+
+-- | Returns a random valid position for spawning food.
+--
+-- Returns Nothing if no free position exists.
+randomFoodPosition :: GameState -> IO (Maybe Position)
+randomFoodPosition state = do
+    let freePositions = freeFoodPositions state
+    case freePositions of
+        [] -> return Nothing
+        _ -> do 
+            index <- randomRIO (0, length freePositions - 1)
+            return (Just (freePositions !! index))
+
+
+-- | Ensures that at least the given number of food items
+-- are present on the map.
+maintainFoodCount :: Int -> GameState -> IO GameState
+maintainFoodCount maxFood state
+    | length (foodPositions (gameMap state)) >= maxFood = return state
+    | otherwise = do
+        maybePosition <- randomFoodPosition state
+        case maybePosition of
+            Nothing -> return state
+            Just position -> maintainFoodCount maxFood (spawnFoodAt position state)
+
+
+
+
 -- -----------------------------------------------------------------------------
 -- Game simulation
 -- -----------------------------------------------------------------------------
@@ -120,8 +181,17 @@ stepGame actions state =
                 )
                 alive
     
-        (survivors, collided) =
+        (survivors, deaths) =
             simulateTurn currentMap moves
+
+        collided =
+            map fst deaths
+
+        killerIds =
+            [ killerId
+            | death <- deaths
+            , Just killerId <- [killerFromDeath death]
+            ]
         
         newMap = removeEatenFood survivors currentMap
 
@@ -129,17 +199,19 @@ stepGame actions state =
             map
                 (\worm ->
                     let agedWorm = increaseAge worm
-                    in
-                        if wormAteFood currentMap worm
-                            then increaseFoodEaten agedWorm
-                            else agedWorm
+                        fedWorm =
+                            if wormAteFood currentMap worm
+                                then increaseFoodEaten agedWorm
+                                else agedWorm
+                    in applyKillStats killerIds fedWorm
                 )
                 survivors
 
         updatedCollided =
             map
                 (\worm ->
-                    (increaseAge worm) { wormAlive = False }
+                    applyKillStats killerIds (increaseAge worm)
+                        { wormAlive = False }
                 )
                 collided
 

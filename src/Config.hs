@@ -7,4 +7,4 @@ maxFoodCount :: Int
 maxFoodCount = 1
 
 tickDelay :: Int
-tickDelay = 300000
+tickDelay = 100000

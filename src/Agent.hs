@@ -59,6 +59,14 @@ randomAgent _ _ = do
     randomChoice allActions
 
 
+-- | Returns True if the worm's head is on its own body.
+hitsOwnBody :: Worm -> Bool
+hitsOwnBody worm =
+    case wormBody worm of
+        [] -> False
+        headPosition : bodyPositions -> headPosition `elem` bodyPositions
+
+
 -- | Return True if performing the given action is immediately safe.
 --
 -- The check uses only the current game state. It avoids walls, poison
@@ -68,10 +76,14 @@ isSafeAction state worm action =
     let movedWorm = moveWormAfterAction False action worm
         newHead = wormHead movedWorm
         currentMap = gameMap state
-        occupied = occupiedPositions (filter wormAlive (gameWorms state))
+        otherWorms = 
+            filter
+                (\other -> wormAlive other && wormId other /= wormId worm) (gameWorms state)
+        otherOccupied = occupiedPositions otherWorms
     in not (isBlocked currentMap newHead)
-    && not (isPoison currentMap newHead)
-    && not (positionOccupied newHead occupied)
+        && not (isPoison currentMap newHead)
+        && not (hitsOwnBody movedWorm)
+        && not (positionOccupied newHead otherOccupied)
 
 
 -- | Returns all immediately safe actions for the given worm.
@@ -109,7 +121,7 @@ distanceAfterAction worm action target =
 bestActions :: (Action -> Int) -> [Action] -> [Action]
 bestActions evaluate actions =
     let bestScore = minimum (map evaluate actions)
-    in filter (\action -> evaluate action == bestScore) allActions
+    in filter (\action -> evaluate action == bestScore) actions
 
 -- | Chooses an action that minimizes the distance to the nearest food.
 greedyFoodAgent :: Agent
@@ -130,3 +142,34 @@ safeGreedyFoodAgent state worm =
             actions -> do
                 let best = bestActions (\action -> distanceAfterAction worm action food) actions
                 randomChoice best
+
+-- | Returns all living worms except the controlled worm.
+enemyWorms :: GameState -> Worm -> [Worm]
+enemyWorms state worm =
+    filter isEnemy (gameWorms state)
+  where
+    isEnemy other = wormAlive other && wormId other /= wormId worm
+
+
+-- | Returns the closest living enemy head, if any exists.
+nearestEnemyHead :: GameState -> Worm -> Maybe Position
+nearestEnemyHead state worm = 
+    case map wormHead (enemyWorms state worm) of
+        [] -> Nothing
+        enemyHeads -> Just $ minimumBy (comparing (distance (wormHead worm))) enemyHeads
+
+
+-- | Chooses a safe action that moves the worm closer to the nearest enemy.
+--
+-- If there is no enemy, it falls back to the safe greedy food agent.
+-- If no safe action exists, it falls back to the random agent.
+safeHunterAgent :: Agent
+safeHunterAgent state worm =
+    case nearestEnemyHead state worm of
+        Nothing -> safeGreedyFoodAgent state worm
+        Just enemyHead -> case safeActions state worm of
+            [] -> randomAgent state worm
+            actions -> do
+                let best = bestActions (\action -> distanceAfterAction worm action enemyHead) actions
+                randomChoice best
+
