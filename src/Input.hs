@@ -2,6 +2,7 @@ module Input where
 
 import Types
 import Movement
+import GHC.IO.Exception (AllocationLimitExceeded)
 
 -- -----------------------------------------------------------------------------
 -- Keyboard input
@@ -29,3 +30,10 @@ playerActionFromInput worm input =
             in maybe GoStraight id action
 
         [] -> GoStraight
+
+
+getHumanAction :: Worm -> IO Action
+getHumanAction worm = do
+    putStrLn "Action: w = north, s = south, a = west, d = east, Enter = straight"
+    input <- getLine
+    pure (playerActionFromInput worm input)

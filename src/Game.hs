@@ -34,7 +34,7 @@ isFreeForFood state pos =
     isEmptyTile stateMap pos &&
     not (positionOccupied pos wormPositions)
   where
-    stateMap = currentMap state
+    stateMap = gameMap state
     wormPositions = occupiedPositions (filter wormAlive (gameWorms state))
 
 

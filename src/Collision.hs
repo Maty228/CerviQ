@@ -1,5 +1,8 @@
 module Collision where
 
+import Types
+import Maps
+import Movement
 
 -- -----------------------------------------------------------------------------
 -- Map collisions

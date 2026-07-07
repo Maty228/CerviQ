@@ -103,3 +103,9 @@ moveWormAfterAction grows action worm =
     let newDirection = applyAction (wormDirection worm) action
         turnedWorm = worm {wormDirection = newDirection}
     in moveWorm grows turnedWorm
+
+
+-- | Returns the head position after performing the given action.
+headAfterAction :: Worm -> Action -> Position
+headAfterAction worm action =
+    wormHead (moveWormAfterAction False action worm)

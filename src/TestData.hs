@@ -14,30 +14,48 @@ initialWormStats =
 
 -- | Simple hardcoded map used for development and testing.
 testMap :: GameMap
-testMap = fromAsciiMap
-    [ "##########"
-    , "#........#"
-    , "#....F...#"
-    , "#........#"
-    , "#........#"
-    , "#.F......#"
-    , "##########"]
+testMap =
+    fromAsciiMap
+        [ "####################"
+        , "#..................#"
+        , "#....F.............#"
+        , "#..................#"
+        , "#..................#"
+        , "#.........F........#"
+        , "#..................#"
+        , "#..................#"
+        , "#.............F....#"
+        , "####################"
+        ]
 
 
 testWorm :: Worm
-testWorm = Worm {
-    wormId = 1,
-    wormBody = [(3,1), (2,1), (1,1)],
-    wormDirection = East,
-    wormAlive = True,
-    wormStats = initialWormStats
-}
+testWorm =
+    Worm
+        { wormId = 1
+        , wormBody = [(3, 1), (2, 1), (1, 1)]
+        , wormDirection = East
+        , wormAlive = True
+        , wormStats = initialWormStats
+        }
+
+
+testAiWorm :: Worm
+testAiWorm = 
+    Worm
+        { wormId = 2
+        , wormBody = [(16, 7), (17, 7), (18, 7)]
+        , wormDirection = West
+        , wormAlive = True
+        , wormStats = initialWormStats
+        }
+
 
 testGame :: GameState
 testGame = 
     GameState
         {
             gameMap = testMap,
-            gameWorms = [testWorm],
+            gameWorms = [testWorm, testAiWorm],
             gameTick = 0
         }

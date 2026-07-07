@@ -21,7 +21,8 @@ executable cerviQ
   other-modules:
     Types
     Movement
-    Collisions
+    Collision
+    Controller
     Input
     Game
     Agent
