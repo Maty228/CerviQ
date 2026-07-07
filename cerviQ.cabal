@@ -20,6 +20,9 @@ executable cerviQ
   main-is:             Main.hs
   other-modules:
     Types
+    Movement
+    Collisions
+    Input
     Game
     Agent
     Config

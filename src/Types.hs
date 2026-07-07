@@ -2,7 +2,13 @@ module Types where
 
 import Data.Map (Map)
 
+
+-- -----------------------------------------------------------------------------
+-- Basic types
+-- -----------------------------------------------------------------------------
+
 type Position = (Int, Int)
+
 
 data Direction
     = North
@@ -18,11 +24,38 @@ data Action
     | TurnRight
     deriving (Show, Eq, Ord, Enum, Bounded)
 
+
+-- -----------------------------------------------------------------------------
+-- Map
+-- -----------------------------------------------------------------------------
+
 data Tile
     = Wall
     | Empty
     | Food
     | Poison
+    deriving (Show, Eq)
+
+
+data GameMap = GameMap
+    {
+        mapWidth :: Int,
+        mapHeight :: Int,
+        mapTiles :: Map Position Tile
+    }
+    deriving (Show, Eq)
+
+
+-- -----------------------------------------------------------------------------
+-- Worm
+-- -----------------------------------------------------------------------------
+
+data WormStats = WormStats
+    {
+        foodEaten :: Int,
+        kills :: Int,
+        age :: Int
+    }
     deriving (Show, Eq)
 
 
@@ -38,22 +71,12 @@ data Worm = Worm
     }
     deriving (Show, Eq)
 
-data WormStats = WormStats
-    {
-        foodEaten :: Int,
-        kills :: Int,
-        age :: Int
-    }
-    deriving (Show, Eq)
 
 
-data GameMap = GameMap
-    {
-        mapWidth :: Int,
-        mapHeight :: Int,
-        mapTiles :: Map Position Tile
-    }
-    deriving (Show, Eq)
+
+-- -----------------------------------------------------------------------------
+-- Game state
+-- -----------------------------------------------------------------------------
 
 data GameState = GameState
     {
