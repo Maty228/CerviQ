@@ -1,4 +1,4 @@
-module Main where
+module Main (main, gameLoop) where
 
 import Config
 import Game
@@ -8,7 +8,7 @@ import TestData
 import Types
 import Gui
 import Agent
-import QLearning
+import qualified QLearning.V1 as V1
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
@@ -48,40 +48,31 @@ gameLoop state = do
 -- Entry point
 -- -----------------------------------------------------------------------------
 
--- | Entry point of the application.
--- main :: IO ()
--- main = do
---     initialState <- maintainFoodCount maxFoodCount testGame
---     gameLoop initialState
-
+-- | Starts the CerviQ Q-learning debugger.
 main :: IO ()
 main = do
-    qTable <- loadQTable "data/models/qlearning_v1.txt"
+    qTable <- V1.loadQTable "data/models/qlearning_v1.txt"
 
     runGui
         [
             GuiAgent
                 {
                     guiAgentWormId = 1,
-                    guiAgentName = "Q-learning v1",
-                    guiAgentController =
-                        AI (qLearningAgent qTable),
-                    guiAgentColor =
-                        makeColorI 50 140 255 255,
-                    guiAgentQTable =
-                        Just qTable
+                    guiAgentName = "Q-learning V1",
+                    guiAgentController = AI (V1.qLearningAgent qTable),
+                    guiAgentColor = makeColorI 50 140 255 255,
+                    guiAgentRewardFunction = Just V1.rewardForStep,
+                    guiAgentDebugProvider = Just (V1.v1DebugProvider qTable)
                 },
 
             GuiAgent
                 {
                     guiAgentWormId = 2,
                     guiAgentName = "SafeGreedyFood",
-                    guiAgentController =
-                        AI safeGreedyFoodAgent,
-                    guiAgentColor =
-                        makeColorI 255 145 40 255,
-                    guiAgentQTable =
-                        Nothing
+                    guiAgentController = AI safeGreedyFoodAgent,
+                    guiAgentColor = makeColorI 255 145 40 255,
+                    guiAgentRewardFunction = Nothing,
+                    guiAgentDebugProvider = Nothing
                 }
         ]
         testGame

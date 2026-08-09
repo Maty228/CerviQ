@@ -1,4 +1,4 @@
-module Config where
+module Config (playerWormId, maxFoodCount, tickDelay) where
 
 playerWormId :: Int
 playerWormId = 1

@@ -1,4 +1,4 @@
-module Input where
+module Input (charToDirection, playerActionFromInput, getHumanAction) where
 
 import Types
 import Movement

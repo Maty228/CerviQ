@@ -6,7 +6,9 @@ import Types
 import Config ( maxFoodCount )
 import Controller ( collectActions )
 import Game ( maintainFoodCount, stepGame )
-import QLearning
+
+import qualified QLearning.Core as Core
+import qualified QLearning.Debug as Debug
 
 import Text.Printf (printf)
 import Graphics.Gloss
@@ -98,7 +100,8 @@ data GuiAgent = GuiAgent
         guiAgentName :: String,
         guiAgentController :: Controller,
         guiAgentColor :: Color,
-        guiAgentQTable :: Maybe QTable
+        guiAgentRewardFunction :: Maybe Core.RewardFunction,
+        guiAgentDebugProvider :: Maybe Debug.AgentDebugProvider
     }
 
 -- | Creates the initial GUI debugger state.
@@ -163,9 +166,11 @@ computeNextSnapshot world
         actions <- collectActions (guiControllers (guiAgents world)) currentState
         let steppedState = stepGame actions currentState
         nextState <- maintainFoodCount maxFoodCount steppedState
-        let rewards = [(wormId', reward) | agent <- guiAgents world,
-                        let wormId' = guiAgentWormId agent,
-                        Just reward <- [rewardForWorm wormId' currentState nextState]]
+        let rewards =
+                [
+                    (guiAgentWormId agent, reward) | agent <- guiAgents world,
+                    Just reward <- [rewardForAgent agent currentState nextState]
+                ]
         let nextSnapshot = GuiSnapshot
                 {
                     snapshotGameState = nextState,
@@ -324,7 +329,7 @@ drawGuiWorld world =
                 drawGuiStatus world,
                 drawAgentLegend world,
                 drawSelectedWormStats world,
-                drawQLearningDebug world
+                drawAgentDebug world
             ]
         )
 
@@ -344,12 +349,13 @@ runGui agents initialState =
         handleGuiEvent
         updateGuiWorld
 
--- | Computes the Q-learning reward of one worm across a game transition.
-rewardForWorm :: Int -> GameState -> GameState -> Maybe Double
-rewardForWorm wormId' beforeState afterState =
-    case (controlledWorm wormId' beforeState, controlledWorm wormId' afterState) of
-        (Just beforeWorm, Just afterWorm) -> Just (rewardForStep beforeState beforeWorm afterState afterWorm)
-        _ -> Nothing
+-- | Computes the configured reward for one GUI agent across a game transition.
+rewardForAgent :: GuiAgent -> GameState -> GameState -> Maybe Double
+rewardForAgent agent beforeState afterState = do
+    rewardFunction <- guiAgentRewardFunction agent
+    beforeWorm <- Core.controlledWorm (guiAgentWormId agent) beforeState
+    afterWorm <- Core.controlledWorm (guiAgentWormId agent) afterState
+    pure ( rewardFunction beforeState beforeWorm afterState afterWorm )
 
 
 -- -----------------------------------------------------------------------------
@@ -489,6 +495,7 @@ drawAgentLegend world = pictures ( header : zipWith drawAgent [0 ..] (guiAgents 
   where
     header = drawGuiText panelLeftX legendTopY 0.16 white "Agents"
 
+    drawAgent :: Int -> GuiAgent -> Picture
     drawAgent index agent =
         let y = legendTopY - 35 - fromIntegral index * 28
 
@@ -525,7 +532,7 @@ snapshotRewardFor wormId' snapshot =
 -- | Draws basic statistics for the currently selected worm.
 drawSelectedWormStats :: GuiWorld -> Picture
 drawSelectedWormStats world =
-    case controlledWorm selectedId currentState of
+    case Core.controlledWorm selectedId currentState of
         Nothing ->
             drawGuiText panelLeftX 140 0.12 red "Selected worm not found"
 
@@ -581,24 +588,40 @@ drawSelectedWormStats world =
         snapshotGameState snapshot
 
 
--- | Draws Q-learning state and Q-values for the selected worm.
-drawQLearningDebug :: GuiWorld -> Picture
-drawQLearningDebug world =
+-- | Draws version-independent debug information for the selected agent.
+drawAgentDebug :: GuiWorld -> Picture
+drawAgentDebug world =
     case
-        (findGuiAgent selectedId (guiAgents world),
-        controlledWorm selectedId currentState
+        (
+            findGuiAgent selectedId (guiAgents world),
+            Core.controlledWorm selectedId currentState
         )
     of
         (Just agent, Just worm) ->
-            case guiAgentQTable agent of
+            case guiAgentDebugProvider agent of
                 Nothing ->
-                    drawGuiText panelLeftX (-55) 0.11 (greyN 0.7) "No Q-learning debug data."
-                Just qTable
-                    | not (wormAlive worm) ->
-                        drawGuiText panelLeftX (-55) 0.11 red "Worm is dead."
-                    | otherwise -> drawQData qTable worm
+                    drawGuiText
+                        panelLeftX
+                        (-55)
+                        0.11
+                        (greyN 0.7)
+                        "No Q-learning debug data."
 
-        _ -> Blank
+                Just debugProvider
+                    | not (wormAlive worm) ->
+                        drawGuiText
+                            panelLeftX
+                            (-55)
+                            0.11
+                            red
+                            "Worm is dead."
+
+                    | otherwise ->
+                        drawDebugInfo
+                            (debugProvider currentState worm)
+
+        _ ->
+            Blank
   where
     selectedId =
         guiSelectedWormId world
@@ -606,64 +629,38 @@ drawQLearningDebug world =
     currentState =
         snapshotGameState (guiCurrent world)
 
-    drawQData qTable worm =
-        let rlState = encodeState currentState worm
 
-            qValueOf action = qValue qTable rlState action
+-- | Draws generic state information and Q-values.
+drawDebugInfo :: Debug.AgentDebugInfo -> Picture
+drawDebugInfo debugInfo =
+    pictures
+        (
+            [ drawGuiText panelLeftX (-45) 0.14 white "RL state"]
+            ++ statePictures
+            ++
+            [
+                drawGuiText panelLeftX qHeaderY 0.14 white "Q-values",
+                drawGuiText panelLeftX (qHeaderY - 27) 0.10 white ("Left:     " ++ printf "%.3f" (qValueOf TurnLeft)),
+                drawGuiText panelLeftX (qHeaderY - 49) 0.10 white ("Straight: " ++ printf "%.3f" (qValueOf GoStraight)),
+                drawGuiText panelLeftX (qHeaderY - 71) 0.10 white ("Right:    " ++ printf "%.3f" (qValueOf TurnRight)),
+                drawGuiText panelLeftX (qHeaderY - 97) 0.10 white ("Best: " ++ show (Debug.debugBestActions debugInfo))
+            ]
+        )
+  where
+    stateLines = Debug.debugStateLines debugInfo
 
-            best = bestQActions qTable rlState
-        in
-            pictures
-                [
-                    drawGuiText panelLeftX (-45) 0.14 white "RL state",
+    statePictures = zipWith drawStateLine [0 ..] stateLines
 
-                    drawGuiText
-                        panelLeftX (-72) 0.09 white
-                        ("Danger L/S/R: "
-                            ++ show (dangerLeft rlState)
-                            ++ " / "
-                            ++ show (dangerStraight rlState)
-                            ++ " / "
-                            ++ show (dangerRight rlState)),
+    drawStateLine :: Int -> (String, String) -> Picture
+    drawStateLine index (label, value) = drawGuiText panelLeftX (-72 - fromIntegral index * 22) 0.09 white (label ++ ": " ++ value)
 
-                    drawGuiText
-                        panelLeftX (-94) 0.09 white
-                        ("Food: "
-                            ++ show (foodHorizontal rlState)
-                            ++ " / "
-                            ++ show (foodVertical rlState)),
+    qHeaderY = -72 - fromIntegral (length stateLines) * 22 - 13
 
-                    drawGuiText
-                        panelLeftX (-116) 0.09 white
-                        ("Direction: " ++ show (currentDirection rlState)),
+    qValueOf action =
+        case lookup action (Debug.debugQValues debugInfo) of
+            Just value -> value
 
-                    drawGuiText
-                        panelLeftX (-138) 0.09 white
-                        ("Mobility: " ++ show (mobilityLevel rlState)),
-
-                    drawGuiText
-                        panelLeftX (-160) 0.09 white
-                        ("Space: " ++ show (spaceLevel rlState)),
-
-                    drawGuiText panelLeftX (-195) 0.14 white "Q-values",
-
-                    drawGuiText
-                        panelLeftX (-222) 0.10 white
-                        ("Left:     " ++ printf "%.3f" (qValueOf TurnLeft)),
-
-                    drawGuiText
-                        panelLeftX (-244) 0.10 white
-                        ("Straight: " ++ printf "%.3f" (qValueOf GoStraight)),
-
-                    drawGuiText
-                        panelLeftX (-266) 0.10 white
-                        ("Right:    " ++ printf "%.3f" (qValueOf TurnRight)),
-
-                    drawGuiText
-                        panelLeftX (-292) 0.10 white
-                        ("Best: " ++ show best)
-                ]
-
+            Nothing -> 0
 
 -- | Draws current simulator status and controls.
 drawGuiStatus :: GuiWorld -> Picture
@@ -676,8 +673,7 @@ drawGuiStatus world =
             drawGuiText panelLeftX (-335) 0.085 (greyN 0.7) "SPACE play/pause | arrows step | R restart | +/- speed | 1-9 select"
         ]
   where
-    currentState =
-        snapshotGameState (guiCurrent world)
+    currentState = snapshotGameState (guiCurrent world)
 
     statusText =
         if guiPaused world

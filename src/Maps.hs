@@ -124,9 +124,12 @@ parseRow y row = concatMap parseCell (zip [0..] row)
 
 -- | Builds a game map from its ASCII representation.
 fromAsciiMap :: [String] -> GameMap
-fromAsciiMap stringMap =
+fromAsciiMap [] =
+    error "Cannot create a game map from an empty ASCII map."
+
+fromAsciiMap stringMap@(firstRow : _) =
     let
-        width = length (head stringMap)
+        width = length firstRow
         height = length stringMap
         rows = zip [0..] stringMap
         tiles = concatMap (uncurry parseRow) rows

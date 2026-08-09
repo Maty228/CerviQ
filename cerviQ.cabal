@@ -30,6 +30,9 @@ executable cerviQ
     Maps
     Evaluation
     QLearning
+    QLearning.Core
+    QLearning.Debug
+    QLearning.V1
     Render
     Training
     TestData
@@ -50,6 +53,7 @@ executable cerviQ
                        -Wmissing-home-modules
                        -Wpartial-fields
                        -Wredundant-constraints
+                       -Wno-missing-export-lists
                        -threaded
 
 source-repository head

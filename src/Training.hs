@@ -1,6 +1,6 @@
 module Training where
 
-import QLearning
+import qualified QLearning.Core as Core
 import Types
 
 -- -----------------------------------------------------------------------------
@@ -60,121 +60,138 @@ nextEpsilon :: TrainingConfig -> Double -> Double
 nextEpsilon config currentEpsilon = 
     max (epsilonMinimum config) (currentEpsilon * epsilonDecay config)
 
--- | Trains the Q-learning agent for one complete episode.
+-- | Trains one Q-learning version for one complete episode.
 --
--- The episode ends when the controlled worm dies or when the configured maximum number of ticks is reached.
-trainEpisode :: TrainingConfig -> Int -> [(Int, Controller)] -> GameState -> Double -> QTable -> IO (QTable, TrainingEpisodeStats)
-trainEpisode config episodeNumber opponentControllers initialState epsilon initialQTable =
-    case controlledWorm controlledId initialState of
-        Nothing -> 
-            pure 
-            (
-                initialQTable,
-                TrainingEpisodeStats {
-                    trainingEpisode = episodeNumber,
-                            trainingEpisodeReward = 0,
-                            trainingEpisodeTicks = 0,
-                            trainingEpisodeEpsilon = epsilon,
-                            trainingEpisodeDied = True
-                }
-            )
+-- The Q-learning specification determines how the game state is encoded and
+-- how rewards are computed. The episode ends when the controlled worm dies or
+-- when the configured maximum number of ticks is reached.
+trainEpisode :: Ord state => Core.QLearningSpec state -> TrainingConfig -> Int -> [(Int, Controller)] -> GameState -> Double -> Core.QTable state -> IO (Core.QTable state, TrainingEpisodeStats)
+trainEpisode spec config episodeNumber opponentControllers initialState epsilon initialQTable =
+        case Core.controlledWorm controlledId initialState of
+            Nothing ->
+                pure
+                    (
+                        initialQTable,
+                        TrainingEpisodeStats
+                            {
+                                trainingEpisode = episodeNumber,
+                                trainingEpisodeReward = 0,
+                                trainingEpisodeTicks = 0,
+                                trainingEpisodeEpsilon = epsilon,
+                                trainingEpisodeDied = True
+                            }
+                    )
 
-        Just worm 
-            | not (wormAlive worm) -> pure (
-                initialQTable,
-                TrainingEpisodeStats {
-                    trainingEpisode = episodeNumber,
-                            trainingEpisodeReward = 0,
-                            trainingEpisodeTicks = 0,
-                            trainingEpisodeEpsilon = epsilon,
-                            trainingEpisodeDied = True
-                }
-            )
-            | otherwise -> trainingLoop 0 0 initialState (encodeState initialState worm) initialQTable
+            Just worm | not (wormAlive worm) ->
+                    pure
+                        (
+                            initialQTable,
+                            TrainingEpisodeStats
+                                {
+                                    trainingEpisode = episodeNumber,
+                                    trainingEpisodeReward = 0,
+                                    trainingEpisodeTicks = 0,
+                                    trainingEpisodeEpsilon = epsilon,
+                                    trainingEpisodeDied = True
+                                }
+                        )
+
+                | otherwise -> trainingLoop 0 0 initialState (Core.qlEncodeState spec initialState worm) initialQTable
   where
     controlledId = trainingWormId config
 
-    -- | Repeatedly performs Q-learning steps until the episode terminates.
-    trainingLoop :: Int -> Double -> GameState -> RLState -> QTable -> IO (QTable, TrainingEpisodeStats)
+    -- Repeatedly performs Q-learning steps until the episode terminates.
     trainingLoop ticks totalReward currentState currentRlState qTable
         | ticks >= maxEpisodeTicks config =
             pure
-                ( 
+                (
                     qTable,
-                    TrainingEpisodeStats 
-                    {
-                        trainingEpisode = episodeNumber,
+                    TrainingEpisodeStats
+                        {
+                            trainingEpisode = episodeNumber,
                             trainingEpisodeReward = totalReward,
                             trainingEpisodeTicks = ticks,
                             trainingEpisodeEpsilon = epsilon,
                             trainingEpisodeDied = False
-                    }
+                        }
                 )
+
         | otherwise = do
-            action <- chooseActionEpsilonGreedy epsilon qTable currentRlState
-            step <- stepEnvironmentWithOpponents controlledId action opponentControllers currentState
-            let reward = rlReward step
-                updatedQTable = updateQValue (learningRate config) (discountFactor config) currentRlState action reward (rlNextRlState step) qTable
+            action <- Core.chooseActionEpsilonGreedy epsilon qTable currentRlState
+            step <- Core.stepEnvironmentWithOpponents spec controlledId action opponentControllers currentState
+
+            let reward = Core.rlReward step
+                updatedQTable = Core.updateQValue (learningRate config) (discountFactor config) currentRlState action reward (Core.rlNextRlState step) qTable
                 newTotalReward = totalReward + reward
                 newTicks = ticks + 1
-            if rlDone step
+
+            if Core.rlDone step
                 then
                     pure
-                        ( 
+                        (
                             updatedQTable,
                             TrainingEpisodeStats
-                            {
+                                {
                                     trainingEpisode = episodeNumber,
                                     trainingEpisodeReward = newTotalReward,
                                     trainingEpisodeTicks = newTicks,
                                     trainingEpisodeEpsilon = epsilon,
                                     trainingEpisodeDied = True
-                            }
+                                }
                         )
+
                 else
-                    case rlNextRlState step of
+                    case Core.rlNextRlState step of
                         Nothing ->
                             pure
                                 (
                                     updatedQTable,
                                     TrainingEpisodeStats
-                                    {
-                                        trainingEpisode = episodeNumber,
-                                        trainingEpisodeReward = newTotalReward,
-                                        trainingEpisodeTicks = newTicks,
-                                        trainingEpisodeEpsilon = epsilon,
-                                        trainingEpisodeDied = True
-                                    }
+                                        {
+                                            trainingEpisode = episodeNumber,
+                                            trainingEpisodeReward = newTotalReward,
+                                            trainingEpisodeTicks = newTicks,
+                                            trainingEpisodeEpsilon = epsilon,
+                                            trainingEpisodeDied = True
+                                        }
                                 )
-                        Just nextRlState -> trainingLoop newTicks newTotalReward (rlNextGameState step) nextRlState updatedQTable
 
+                        Just nextRlState -> trainingLoop newTicks newTotalReward (Core.rlNextGameState step) nextRlState updatedQTable
 
 -- -----------------------------------------------------------------------------
 -- Multi-episode training
 -- -----------------------------------------------------------------------------
 
--- | Trains a Q-learning agent over all configured training episodes.
+-- | Trains one Q-learning version over all configured training episodes.
 --
--- The learned Q-table is carried from one episode to the next, while epsilon gradually decreases according to the configured decay schedule.
-trainEpisodes :: TrainingConfig -> [(Int, Controller)] -> GameState -> IO (QTable, [TrainingEpisodeStats])
-trainEpisodes config opponentControllers initialState =
-    trainingLoop 1 (epsilonStart config) emptyQTable []
+-- The learned Q-table is carried from one episode to the next, while epsilon
+-- gradually decreases according to the configured decay schedule.
+trainEpisodes :: Ord state => Core.QLearningSpec state -> TrainingConfig -> [(Int, Controller)] -> GameState -> IO (Core.QTable state, [TrainingEpisodeStats])
+trainEpisodes spec config opponentControllers initialState =
+    trainingLoop 1 (epsilonStart config) Core.emptyQTable []
   where
-    trainingLoop :: Int -> Double -> QTable -> [TrainingEpisodeStats] -> IO (QTable, [TrainingEpisodeStats])
+    -- Repeatedly trains episodes while carrying over the learned Q-table.
     trainingLoop episodeNumber epsilon qTable collectedStats
-        | episodeNumber > trainingEpisodes config = pure (qTable, reverse collectedStats)
-        | otherwise = do 
-            (updatedQTable, episodeStats) <- trainEpisode config episodeNumber opponentControllers initialState epsilon qTable
+        | episodeNumber > trainingEpisodes config =
+            pure (qTable, reverse collectedStats)
+
+        | otherwise = do
+            (updatedQTable, episodeStats) <- trainEpisode spec config episodeNumber opponentControllers initialState epsilon qTable
+
             let updatedStats = episodeStats : collectedStats
                 interval = progressInterval config
-                shouldPrintProgress = interval > 0 && ( episodeNumber `mod` interval == 0 || episodeNumber == trainingEpisodes config)
+                shouldPrintProgress = 
+                    interval > 0 && ( episodeNumber `mod` interval == 0 || episodeNumber == trainingEpisodes config)
+
                 recentStats = take interval updatedStats
+
             if shouldPrintProgress
                 then
                     printTrainingProgress episodeNumber (trainingEpisodes config) recentStats
-                else pure()
-            trainingLoop (episodeNumber + 1) (nextEpsilon config epsilon) updatedQTable (episodeStats : collectedStats)
+                else
+                    pure ()
 
+            trainingLoop (episodeNumber + 1) (nextEpsilon config epsilon) updatedQTable updatedStats
 
 -- -----------------------------------------------------------------------------
 -- Training statistics helpers
