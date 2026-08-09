@@ -15,14 +15,14 @@ data Direction
     | East
     | South
     | West
-    deriving (Show, Eq, Ord, Enum, Bounded)
+    deriving (Show, Read, Eq, Ord, Enum, Bounded)
 
 
 data Action
     = TurnLeft
     | GoStraight
     | TurnRight
-    deriving (Show, Eq, Ord, Enum, Bounded)
+    deriving (Show, Read, Eq, Ord, Enum, Bounded)
 
 
 -- -----------------------------------------------------------------------------

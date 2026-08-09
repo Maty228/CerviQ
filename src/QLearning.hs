@@ -13,6 +13,7 @@ import Types
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import System.Random (randomRIO)
+import Text.Read (readMaybe)
 
 
 -- -----------------------------------------------------------------------------
@@ -23,7 +24,7 @@ import System.Random (randomRIO)
 data Danger
     = Safe
     | Dangerous
-    deriving (Show, Eq, Ord)
+    deriving (Show, Read, Eq, Ord)
 
 
 -- | Relative direction around the worm.
@@ -31,7 +32,7 @@ data RelativeDirection
     = RelLeft
     | RelStraight
     | RelRight
-    deriving (Show, Eq, Ord)
+    deriving (Show, Read, Eq, Ord)
 
 
 -- | Direction of the closest food relative to the worm.
@@ -41,7 +42,7 @@ data FoodDirection
     | FoodAhead
     | FoodBehind
     | FoodSame
-    deriving (Show, Eq, Ord)
+    deriving (Show, Read, Eq, Ord)
 
 
 -- | Number of safe actions available from the current state.
@@ -50,7 +51,7 @@ data Mobility
     | OneMove
     | TwoMoves
     | ThreeMoves
-    deriving (Show, Eq, Ord)
+    deriving (Show, Read, Eq, Ord)
 
 
 -- | Coarse estimate of how much free space the worm has.
@@ -58,7 +59,7 @@ data SpaceLevel
     = Trapped
     | Tight
     | Open
-    deriving (Show, Eq, Ord)
+    deriving (Show, Read, Eq, Ord)
 
 
 -- | Compact representation of the game state for tabular Q-learning.
@@ -73,7 +74,7 @@ data RLState = RLState
         mobilityLevel :: Mobility,
         spaceLevel :: SpaceLevel
     }
-    deriving (Show, Eq, Ord)
+    deriving (Show, Read, Eq, Ord)
 
 
 -- -----------------------------------------------------------------------------
@@ -465,3 +466,30 @@ updateQValue alpha gamma state action reward nextState table =
             oldValue + alpha * (target - oldValue)
     in
         setQValue state action newValue table
+
+
+-- | Saves a Q-table to a text file.
+saveQTable :: FilePath -> QTable -> IO ()
+saveQTable filePath qTable =
+    writeFile filePath (show qTable)
+
+-- | Loads a Q-table from a text file.
+--
+-- Fails with a descripive error if the file does not contain a valid Q-table.
+loadQTable :: FilePath -> IO QTable
+loadQTable filePath = do
+    contents <- readFile filePath
+
+    case readMaybe contents of
+        Just qTable -> pure qTable
+        Nothing -> fail ("Count not parse Q-table from file: " ++ filePath)
+
+-- -----------------------------------------------------------------------------
+-- Learned agent
+-- -----------------------------------------------------------------------------
+
+-- | Creates an agent that always chooses an action with the highest learned
+-- Q-value for the current state.
+qLearningAgent :: QTable -> Agent
+qLearningAgent table state worm =
+    bestQAction table (encodeState state worm)
