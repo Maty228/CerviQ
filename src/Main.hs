@@ -7,10 +7,12 @@ import Controller
 import TestData
 import Types
 import Gui
-import Agent (safeGreedyFoodAgent, safeHunterAgent)
+import Agent
+import QLearning
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
+import Graphics.Gloss
 
 
 -- -----------------------------------------------------------------------------
@@ -53,4 +55,33 @@ gameLoop state = do
 --     gameLoop initialState
 
 main :: IO ()
-main = runGui [(1, AI safeGreedyFoodAgent), (2, AI safeHunterAgent)] testGame
+main = do
+    qTable <- loadQTable "data/models/qlearning_v1.txt"
+
+    runGui
+        [
+            GuiAgent
+                {
+                    guiAgentWormId = 1,
+                    guiAgentName = "Q-learning v1",
+                    guiAgentController =
+                        AI (qLearningAgent qTable),
+                    guiAgentColor =
+                        makeColorI 50 140 255 255,
+                    guiAgentQTable =
+                        Just qTable
+                },
+
+            GuiAgent
+                {
+                    guiAgentWormId = 2,
+                    guiAgentName = "SafeGreedyFood",
+                    guiAgentController =
+                        AI safeGreedyFoodAgent,
+                    guiAgentColor =
+                        makeColorI 255 145 40 255,
+                    guiAgentQTable =
+                        Nothing
+                }
+        ]
+        testGame
