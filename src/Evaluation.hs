@@ -4,6 +4,7 @@ import Config
 import Controller
 import Game
 import Types
+import Agent(safeGreedyFoodAgent)
 
 
 
@@ -227,3 +228,46 @@ average :: [Int] -> Double
 average [] = 0
 average values = fromIntegral (sum values) / fromIntegral (length values)
 
+
+
+-- | Summary of one evaluated agent including its name and statistics.
+data AgentEvaluation = AgentEvaluation
+    {
+        evaluatedAgentName :: String,
+        evaluatedAgentId :: Int,
+        evaluationSummary :: EvaluationSummary,
+        wormSummary :: WormEvaluationSummary
+    }
+    deriving (Show, Eq)
+
+
+-- | Evaluates one agent against the default test environment.
+--
+-- Runs multiple episodes and returns aggregated statistics for the agent.
+evaluateAgent
+    :: String
+    -> Int
+    -> Controller
+    -> Int
+    -> GameState
+    -> IO AgentEvaluation
+evaluateAgent name agentId controller episodes initialState = do
+
+    results <-
+        runEpisodes
+            episodes
+            500
+            [
+                (agentId, controller),
+                (2, AI safeGreedyFoodAgent)
+            ]
+            initialState
+
+    pure
+        AgentEvaluation
+            {
+                evaluatedAgentName = name,
+                evaluatedAgentId = agentId,
+                evaluationSummary = summarizeResults results,
+                wormSummary = summarizeWormResults agentId results
+            }

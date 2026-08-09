@@ -33,11 +33,13 @@ executable cerviQ
     Render
     Training
     TestData
+    Gui
   default-language:    Haskell2010
   build-depends:       
     base >= 4.7 && < 5,
     containers,
-    random
+    random,
+    gloss
 
   ghc-options:         -Wall
                        -Wcompat
@@ -48,6 +50,7 @@ executable cerviQ
                        -Wmissing-home-modules
                        -Wpartial-fields
                        -Wredundant-constraints
+                       -threaded
 
 source-repository head
   type:     git

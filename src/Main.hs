@@ -2,11 +2,12 @@ module Main where
 
 import Config
 import Game
-import Maps
 import Render
 import Controller
 import TestData
 import Types
+import Gui
+import Agent (safeGreedyFoodAgent, safeHunterAgent)
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
@@ -46,7 +47,10 @@ gameLoop state = do
 -- -----------------------------------------------------------------------------
 
 -- | Entry point of the application.
+-- main :: IO ()
+-- main = do
+--     initialState <- maintainFoodCount maxFoodCount testGame
+--     gameLoop initialState
+
 main :: IO ()
-main = do
-    initialState <- maintainFoodCount maxFoodCount testGame
-    gameLoop initialState
+main = runGui [(1, AI safeGreedyFoodAgent), (2, AI safeHunterAgent)] testGame
