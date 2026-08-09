@@ -43,3 +43,4 @@
 
 # Logs
 *.log
+.stack-work/stack.sqlite3
