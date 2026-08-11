@@ -33,6 +33,8 @@ executable cerviQ
     QLearning.Core
     QLearning.Debug
     QLearning.V1
+    QLearning.V2
+    QLearning.V3
     Render
     Training
     TestData
@@ -42,7 +44,10 @@ executable cerviQ
     base >= 4.7 && < 5,
     containers,
     random,
-    gloss
+    gloss,
+    time ^>=1.12.2,
+
+
 
   ghc-options:         -Wall
                        -Wcompat

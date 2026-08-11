@@ -27,6 +27,7 @@ module QLearning.Core
     , maxQValue
     , chooseActionEpsilonGreedy
     , updateQValue
+    , hasQValue
 
     , saveQTable
     , loadQTable
@@ -255,6 +256,16 @@ updateQValue alpha gamma state action reward nextState table =
             newValue = oldValue + alpha * (target - oldValue)
         in
             setQValue state action newValue table
+
+-- | Returns True if the Q-table contains a learned value for a state-action pair.
+hasQValue
+    :: Ord state
+    => QTable state
+    -> state
+    -> Action
+    -> Bool
+hasQValue table state action =
+    Map.member (state, action) table
 
 
 -- -----------------------------------------------------------------------------
