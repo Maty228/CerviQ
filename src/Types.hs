@@ -90,6 +90,7 @@ data GameState = GameState
     {
         gameMap :: GameMap,
         gameWorms :: [Worm],
-        gameTick :: Int
+        gameTick :: Int,
+        gameHeadHistory :: Map Int [Position]
     }
     deriving (Show, Eq)

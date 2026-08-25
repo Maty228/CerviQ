@@ -4,6 +4,7 @@ import Types
 import Maps
 import Movement
 import Collision
+import qualified Data.Map as Map
 
 import System.Random (randomRIO)
 
@@ -159,6 +160,55 @@ data GameStepResult = GameStepResult
 
 
 -- -----------------------------------------------------------------------------
+-- Head history
+-- -----------------------------------------------------------------------------
+
+-- | Maximum number of recent head positions stored for each worm.
+headHistoryLimit :: Int
+headHistoryLimit = 256
+
+
+-- | Creates the initial head-position history for a collection of worms.
+initialHeadHistory :: [Worm] -> Map.Map Int [Position]
+initialHeadHistory worms =
+    Map.fromList
+        [
+            (wormId worm, [headPosition])
+            | worm <- worms,
+              headPosition : _ <- [wormBody worm]
+        ]
+
+
+-- | Resets head-position history to the current position of every worm.
+resetHeadHistory :: GameState -> GameState
+resetHeadHistory state =
+    state
+        {
+            gameHeadHistory = initialHeadHistory (gameWorms state)
+        }
+
+
+-- | Records the current head position of every worm.
+recordHeadHistory :: [Worm] -> Map.Map Int [Position] -> Map.Map Int [Position]
+recordHeadHistory worms history =
+    foldr recordWorm history worms
+  where
+    recordWorm worm currentHistory =
+        case wormBody worm of
+            [] -> currentHistory
+
+            headPosition : _ ->
+                let previousHistory =
+                        Map.findWithDefault [] (wormId worm) currentHistory
+
+                in
+                    Map.insert
+                        (wormId worm)
+                        (take headHistoryLimit (headPosition : previousHistory))
+                        currentHistory
+
+
+-- -----------------------------------------------------------------------------
 -- Game simulation
 -- -----------------------------------------------------------------------------
 
@@ -228,12 +278,16 @@ stepGameDetailed actions state =
         updatedWorms =
             updatedSurvivors ++ updatedCollided ++ alreadyDead
 
+        updatedHeadHistory =
+            recordHeadHistory updatedWorms (gameHeadHistory state)
+
         updatedState =
             state
                 {
                     gameMap = newMap,
                     gameWorms = updatedWorms,
-                    gameTick = gameTick state + 1
+                    gameTick = gameTick state + 1,
+                    gameHeadHistory = updatedHeadHistory
                 }
 
     in

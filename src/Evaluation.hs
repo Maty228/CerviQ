@@ -447,7 +447,7 @@ poisonDeathRateByWorm targetId results =
     deathReasonRateByWorm
         isPoisonDeath
         targetId
-        results
+        results 
   where
 
     -- | Returns True for poison deaths.

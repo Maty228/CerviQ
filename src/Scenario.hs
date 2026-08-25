@@ -2,8 +2,9 @@ module Scenario where
 
 import Data.List (nub)
 
-import Maps
+import Maps ( isInsideMap, isEmptyTile )
 import Types
+import Game (initialHeadHistory)
 
 
 -- -----------------------------------------------------------------------------
@@ -96,9 +97,11 @@ scenarioInitialState scenario =
     case validateScenario scenario of
         [] ->
             GameState
-                { gameMap = scenarioMap scenario
-                , gameWorms = scenarioWorms scenario
-                , gameTick = 0
+                {
+                    gameMap = scenarioMap scenario,
+                    gameWorms = scenarioWorms scenario,
+                    gameTick = 0,
+                    gameHeadHistory = initialHeadHistory (scenarioWorms scenario)
                 }
 
         errors ->
