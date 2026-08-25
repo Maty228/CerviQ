@@ -2,7 +2,7 @@ module Training where
 
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import Data.List (sort)
+import Data.List (intercalate, sort)
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
 import Text.Printf (printf)
 
@@ -48,6 +48,38 @@ defaultTrainingConfig =
 
 
 -- -----------------------------------------------------------------------------
+-- Training episode setup
+-- -----------------------------------------------------------------------------
+
+-- | Complete environment configuration selected for one training episode.
+data TrainingEpisodeSetup = TrainingEpisodeSetup
+    {
+        trainingSetupInitialState :: GameState,
+        trainingSetupOpponentControllers :: [(Int, Controller)],
+        trainingSetupScenarioName :: String,
+        trainingSetupOpponentName :: String,
+        trainingSetupStartVariant :: String
+    }
+
+
+-- | Generates the environment configuration for one training episode.
+type TrainingEpisodeSampler = Int -> IO TrainingEpisodeSetup
+
+
+-- | Creates a fixed setup used by the original training interface.
+fixedTrainingEpisodeSetup :: [(Int, Controller)] -> GameState -> TrainingEpisodeSetup
+fixedTrainingEpisodeSetup opponentControllers initialState =
+    TrainingEpisodeSetup
+        {
+            trainingSetupInitialState = initialState,
+            trainingSetupOpponentControllers = opponentControllers,
+            trainingSetupScenarioName = "Fixed",
+            trainingSetupOpponentName = "Fixed",
+            trainingSetupStartVariant = "Fixed"
+        }
+
+
+-- -----------------------------------------------------------------------------
 -- Training statistics
 -- -----------------------------------------------------------------------------
 
@@ -62,26 +94,32 @@ data TrainingEpisodeStats = TrainingEpisodeStats
         trainingEpisodeFoodEaten :: Int,
         trainingEpisodeKills :: Int,
         trainingEpisodeFinalLength :: Int,
-        trainingEpisodeLastStanding :: Bool
+        trainingEpisodeLastStanding :: Bool,
+        trainingEpisodeScenario :: String,
+        trainingEpisodeOpponent :: String,
+        trainingEpisodeStartVariant :: String
     }
     deriving (Show, Eq)
 
 
 -- | Creates training statistics from the final state of one episode.
-makeTrainingEpisodeStats :: TrainingConfig -> Int -> Double -> Double -> Int -> Bool -> GameState -> TrainingEpisodeStats
-makeTrainingEpisodeStats config episodeNumber epsilon totalReward ticks died finalState =
-        TrainingEpisodeStats
-            {
-                trainingEpisode = episodeNumber,
-                trainingEpisodeReward = totalReward,
-                trainingEpisodeTicks = ticks,
-                trainingEpisodeEpsilon = epsilon,
-                trainingEpisodeDied = died,
-                trainingEpisodeFoodEaten = finalFood,
-                trainingEpisodeKills = finalKills,
-                trainingEpisodeFinalLength = finalLength,
-                trainingEpisodeLastStanding = lastStanding
-            }
+makeTrainingEpisodeStats :: TrainingConfig -> TrainingEpisodeSetup -> Int -> Double -> Double -> Int -> Bool -> GameState -> TrainingEpisodeStats
+makeTrainingEpisodeStats config setup episodeNumber epsilon totalReward ticks died finalState =
+    TrainingEpisodeStats
+        {
+            trainingEpisode = episodeNumber,
+            trainingEpisodeReward = totalReward,
+            trainingEpisodeTicks = ticks,
+            trainingEpisodeEpsilon = epsilon,
+            trainingEpisodeDied = died,
+            trainingEpisodeFoodEaten = finalFood,
+            trainingEpisodeKills = finalKills,
+            trainingEpisodeFinalLength = finalLength,
+            trainingEpisodeLastStanding = lastStanding,
+            trainingEpisodeScenario = trainingSetupScenarioName setup,
+            trainingEpisodeOpponent = trainingSetupOpponentName setup,
+            trainingEpisodeStartVariant = trainingSetupStartVariant setup
+        }
   where
     controlledId = trainingWormId config
 
@@ -129,32 +167,44 @@ nextEpsilon :: TrainingConfig -> Double -> Double
 nextEpsilon config currentEpsilon = max (epsilonMinimum config) (currentEpsilon * epsilonDecay config)
 
 
--- | Trains one Q-learning version for one complete episode.
---
--- The Q-learning specification determines how the game state is encoded and
--- how rewards are computed. The episode ends when the controlled worm dies or
--- when the configured maximum number of ticks is reached.
+-- | Trains one Q-learning version for one complete episode using a fixed
+-- environment.
 trainEpisode :: Ord state => Core.QLearningSpec state -> TrainingConfig -> Int -> [(Int, Controller)] -> GameState -> Double -> Core.QTable state -> IO (Core.QTable state, TrainingEpisodeStats)
 trainEpisode spec config episodeNumber opponentControllers initialState epsilon initialQTable =
-        case Core.controlledWorm controlledId initialState of
-            Nothing ->
+    trainEpisodeWithSetup
+        spec
+        config
+        episodeNumber
+        (fixedTrainingEpisodeSetup opponentControllers initialState)
+        epsilon
+        initialQTable
+
+
+-- | Trains one Q-learning version for one complete sampled episode.
+trainEpisodeWithSetup :: Ord state => Core.QLearningSpec state -> TrainingConfig -> Int -> TrainingEpisodeSetup -> Double -> Core.QTable state -> IO (Core.QTable state, TrainingEpisodeStats)
+trainEpisodeWithSetup spec config episodeNumber setup epsilon initialQTable =
+    case Core.controlledWorm controlledId initialState of
+        Nothing ->
+            pure
+                (
+                    initialQTable,
+                    makeTrainingEpisodeStats config setup episodeNumber epsilon 0 0 True initialState
+                )
+
+        Just worm
+            | not (wormAlive worm) ->
                 pure
                     (
-                        initialQTable, 
-                        makeTrainingEpisodeStats config episodeNumber epsilon 0 0 True initialState
+                        initialQTable,
+                        makeTrainingEpisodeStats config setup episodeNumber epsilon 0 0 True initialState
                     )
 
-            Just worm
-                | not (wormAlive worm) ->
-                    pure
-                        (
-                            initialQTable,
-                            makeTrainingEpisodeStats config episodeNumber epsilon 0 0 True initialState
-                        )
-
-                | otherwise -> trainingLoop 0 0 initialState (Core.qlEncodeState spec initialState worm) initialQTable
+            | otherwise ->
+                trainingLoop 0 0 initialState (Core.qlEncodeState spec initialState worm) initialQTable
   where
     controlledId = trainingWormId config
+    initialState = trainingSetupInitialState setup
+    opponentControllers = trainingSetupOpponentControllers setup
 
     -- | Repeatedly performs Q-learning steps until the episode terminates.
     trainingLoop ticks totalReward currentState currentRlState qTable
@@ -162,7 +212,7 @@ trainEpisode spec config episodeNumber opponentControllers initialState epsilon 
             pure
                 (
                     qTable,
-                    makeTrainingEpisodeStats config episodeNumber epsilon totalReward ticks False currentState
+                    makeTrainingEpisodeStats config setup episodeNumber epsilon totalReward ticks False currentState
                 )
 
         | otherwise = do
@@ -171,13 +221,9 @@ trainEpisode spec config episodeNumber opponentControllers initialState epsilon 
             step <- Core.stepEnvironmentWithOpponents spec controlledId action opponentControllers currentState
 
             let reward = Core.rlReward step
-
                 nextGameState = Core.rlNextGameState step
-
                 updatedQTable = Core.updateQValue (learningRate config) (discountFactor config) currentRlState action reward (Core.rlNextRlState step) qTable
-
                 newTotalReward = totalReward + reward
-
                 newTicks = ticks + 1
 
             if Core.rlDone step
@@ -185,7 +231,7 @@ trainEpisode spec config episodeNumber opponentControllers initialState epsilon 
                     pure
                         (
                             updatedQTable,
-                            makeTrainingEpisodeStats config episodeNumber epsilon newTotalReward newTicks True nextGameState
+                            makeTrainingEpisodeStats config setup episodeNumber epsilon newTotalReward newTicks True nextGameState
                         )
 
                 else
@@ -194,62 +240,72 @@ trainEpisode spec config episodeNumber opponentControllers initialState epsilon 
                             pure
                                 (
                                     updatedQTable,
-                                    makeTrainingEpisodeStats config episodeNumber epsilon newTotalReward newTicks True nextGameState
+                                    makeTrainingEpisodeStats config setup episodeNumber epsilon newTotalReward newTicks True nextGameState
                                 )
 
-                        Just nextRlState -> trainingLoop newTicks newTotalReward nextGameState nextRlState updatedQTable
+                        Just nextRlState ->
+                            trainingLoop newTicks newTotalReward nextGameState nextRlState updatedQTable
 
 
 -- -----------------------------------------------------------------------------
 -- Multi-episode training
 -- -----------------------------------------------------------------------------
 
--- | Trains one Q-learning version over all configured training episodes.
---
--- The learned Q-table is carried from one episode to the next, while epsilon
--- gradually decreases according to the configured decay schedule.
+-- | Trains one Q-learning version using the same environment for every episode.
 trainEpisodes :: Ord state => Core.QLearningSpec state -> TrainingConfig -> [(Int, Controller)] -> GameState -> IO (Core.QTable state, [TrainingEpisodeStats])
-trainEpisodes spec config opponentControllers initialState = do
+trainEpisodes spec config opponentControllers initialState =
+    trainEpisodesWithSampler spec config sampler
+  where
+    sampler _ =
+        pure (fixedTrainingEpisodeSetup opponentControllers initialState)
+
+
+-- | Trains one Q-learning version while sampling a new environment configuration
+-- for every episode.
+trainEpisodesWithSampler :: Ord state => Core.QLearningSpec state -> TrainingConfig -> TrainingEpisodeSampler -> IO (Core.QTable state, [TrainingEpisodeStats])
+trainEpisodesWithSampler spec config sampler = do
     startTime <- getCurrentTime
 
     trainingLoop 1 (epsilonStart config) Core.emptyQTable [] [] startTime startTime
   where
-    -- | Repeatedly trains episodes while carrying over the learned Q-table.
+    -- | Repeatedly samples and trains episodes while carrying over the Q-table.
     trainingLoop episodeNumber epsilon qTable collectedStats blockStats blockStartTime trainingStartTime
-            | episodeNumber > trainingEpisodes config =
-                pure
-                    (
-                        qTable,
-                        reverse collectedStats
-                    )
+        | episodeNumber > trainingEpisodes config =
+            pure
+                (
+                    qTable,
+                    reverse collectedStats
+                )
 
-            | otherwise = do
-                (updatedQTable, episodeStats) <- trainEpisode spec config episodeNumber opponentControllers initialState epsilon qTable
+        | otherwise = do
+            setup <- sampler episodeNumber
 
-                let updatedStats = episodeStats : collectedStats
-                    updatedBlockStats = episodeStats : blockStats
-                    interval = progressInterval config
-                    shouldPrintProgress =
-                        interval > 0
-                            && ( episodeNumber `mod` interval == 0 || episodeNumber == trainingEpisodes config )
+            (updatedQTable, episodeStats) <-
+                trainEpisodeWithSetup spec config episodeNumber setup epsilon qTable
 
-                    nextEpisode = episodeNumber + 1
+            let updatedStats = episodeStats : collectedStats
+                updatedBlockStats = episodeStats : blockStats
+                interval = progressInterval config
+                shouldPrintProgress =
+                    interval > 0
+                        && ( episodeNumber `mod` interval == 0 || episodeNumber == trainingEpisodes config )
 
-                    nextEpisodeEpsilon = nextEpsilon config epsilon
+                nextEpisode = episodeNumber + 1
+                nextEpisodeEpsilon = nextEpsilon config epsilon
 
-                if shouldPrintProgress
-                    then do
-                        now <- getCurrentTime
+            if shouldPrintProgress
+                then do
+                    now <- getCurrentTime
 
-                        let blockSeconds = realToFrac (diffUTCTime now blockStartTime)
+                    let blockSeconds = realToFrac (diffUTCTime now blockStartTime)
+                        totalSeconds = realToFrac (diffUTCTime now trainingStartTime)
 
-                            totalSeconds = realToFrac (diffUTCTime now trainingStartTime)
+                    printTrainingProgress episodeNumber (trainingEpisodes config) updatedBlockStats updatedQTable blockSeconds totalSeconds
 
-                        printTrainingProgress episodeNumber (trainingEpisodes config) updatedBlockStats updatedQTable blockSeconds totalSeconds
-                        trainingLoop nextEpisode nextEpisodeEpsilon updatedQTable updatedStats [] now trainingStartTime
+                    trainingLoop nextEpisode nextEpisodeEpsilon updatedQTable updatedStats [] now trainingStartTime
 
-                    else
-                        trainingLoop nextEpisode nextEpisodeEpsilon updatedQTable updatedStats updatedBlockStats blockStartTime trainingStartTime
+                else
+                    trainingLoop nextEpisode nextEpisodeEpsilon updatedQTable updatedStats updatedBlockStats blockStartTime trainingStartTime
 
 
 -- -----------------------------------------------------------------------------
@@ -442,6 +498,27 @@ formatDuration seconds
 -- Progress output
 -- -----------------------------------------------------------------------------
 
+-- | Counts occurrences of string labels in training statistics.
+trainingLabelCounts :: (TrainingEpisodeStats -> String) -> [TrainingEpisodeStats] -> [(String, Int)]
+trainingLabelCounts getLabel stats =
+    Map.toList
+        ( Map.fromListWith
+            (+)
+            [
+                (getLabel stat, 1) | stat <- stats
+            ]
+        )
+
+
+-- | Formats occurrence counts for progress output.
+formatTrainingLabelCounts :: [(String, Int)] -> String
+formatTrainingLabelCounts counts =
+    intercalate ", "
+        [
+            label ++ "=" ++ show count | (label, count) <- counts
+        ]
+
+
 -- | Prints a detailed summary of the most recent training block.
 printTrainingProgress :: Ord state => Int -> Int -> [TrainingEpisodeStats] -> Core.QTable state -> Double -> Double -> IO ()
 printTrainingProgress currentEpisode totalEpisodes recentStats qTable blockSeconds totalSeconds =
@@ -494,6 +571,9 @@ printTrainingProgress currentEpisode totalEpisodes recentStats qTable blockSecon
                 putStrLn $ printf "  average kills:        %.3f" (averageTrainingKills recentStats)
                 putStrLn $ printf "  average final length: %.2f" (averageTrainingFinalLength recentStats)
                 putStrLn $ printf "  last standing rate:   %.1f %%" (100 * trainingLastStandingRate recentStats)
+                putStrLn $ "  scenarios:            " ++ formatTrainingLabelCounts (trainingLabelCounts trainingEpisodeScenario recentStats)
+                putStrLn $ "  opponents:            " ++ formatTrainingLabelCounts (trainingLabelCounts trainingEpisodeOpponent recentStats)
+                putStrLn $ "  starts:               " ++ formatTrainingLabelCounts (trainingLabelCounts trainingEpisodeStartVariant recentStats)
                 putStrLn $ printf "  epsilon:              %.5f" (trainingEpisodeEpsilon latestStats)
                 putStrLn $ "  Q-table states:       " ++ show (qTableStateCount qTable)
                 putStrLn $ "  Q-table entries:      " ++ show (qTableEntryCount qTable)
@@ -503,4 +583,5 @@ printTrainingProgress currentEpisode totalEpisodes recentStats qTable blockSecon
                 putStrLn $ printf "  training speed:       %.2f episodes/s" episodesPerSecond
                 putStrLn $ printf "  simulation speed:     %.0f ticks/s" ticksPerSecond
                 putStrLn $ "  estimated remaining:  " ++ formatDuration estimatedRemainingSeconds
+                putStrLn "======================================"
                 putStrLn ""
