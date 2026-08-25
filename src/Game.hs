@@ -149,13 +149,20 @@ maintainFoodCount maxFood state
             Just position -> maintainFoodCount maxFood (spawnFoodAt position state)
 
 
+-- | Result of one game step including the updated state and deaths.
+data GameStepResult = GameStepResult
+    {
+        gameStepState :: GameState,
+        gameStepDeaths :: [(Int, DeathReason)]
+    }
+    deriving (Show, Eq)
 
 
 -- -----------------------------------------------------------------------------
 -- Game simulation
 -- -----------------------------------------------------------------------------
 
--- | Advances the game by one tick.
+-- | Advances the game by one tick and returns detailed information about deaths.
 --
 -- For each living worm:
 --   * determines its action,
@@ -164,10 +171,8 @@ maintainFoodCount maxFood state
 --   * updates statistics,
 --   * removes eaten food,
 --   * increments the global game tick.
-
-
-stepGame :: [(Int, Action)] -> GameState -> GameState
-stepGame actions state =
+stepGameDetailed :: [(Int, Action)] -> GameState -> GameStepResult
+stepGameDetailed actions state =
     let currentMap = gameMap state
         alive = filter wormAlive (gameWorms state)
         alreadyDead = filter (not . wormAlive) (gameWorms state)
@@ -180,7 +185,7 @@ stepGame actions state =
                     in (grows, action, worm)
                 )
                 alive
-    
+
         (survivors, deaths) =
             simulateTurn currentMap moves
 
@@ -192,7 +197,12 @@ stepGame actions state =
             | death <- deaths
             , Just killerId <- [killerFromDeath death]
             ]
-        
+
+        deathEvents =
+            [ (wormId worm, reason)
+            | (worm, reason) <- deaths
+            ]
+
         newMap = removeEatenFood survivors currentMap
 
         updatedSurvivors =
@@ -217,10 +227,24 @@ stepGame actions state =
 
         updatedWorms =
             updatedSurvivors ++ updatedCollided ++ alreadyDead
-    in 
-        state
+
+        updatedState =
+            state
+                {
+                    gameMap = newMap,
+                    gameWorms = updatedWorms,
+                    gameTick = gameTick state + 1
+                }
+
+    in
+        GameStepResult
             {
-                gameMap = newMap,
-                gameWorms = updatedWorms,
-                gameTick = gameTick state + 1
+                gameStepState = updatedState,
+                gameStepDeaths = deathEvents
             }
+
+
+-- | Advances the game by one tick.
+stepGame :: [(Int, Action)] -> GameState -> GameState
+stepGame actions state =
+    gameStepState (stepGameDetailed actions state)

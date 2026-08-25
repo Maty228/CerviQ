@@ -1,61 +1,35 @@
 module TestData where
 
+import Scenario
+import Scenarios
 import Types
-import Maps
 
 
+-- | Initial worm statistics kept for backwards compatibility with test code.
 initialWormStats :: WormStats
 initialWormStats =
-    WormStats
-        { foodEaten = 0
-        , kills = 0
-        , age = 0
-        }
+    emptyWormStats
 
--- | Simple hardcoded map used for development and testing.
+
+-- | Original development map kept for backwards compatibility.
 testMap :: GameMap
 testMap =
-    fromAsciiMap
-        [ "####################"
-        , "#..................#"
-        , "#....F.............#"
-        , "#..................#"
-        , "#..................#"
-        , "#.........F........#"
-        , "#..................#"
-        , "#..................#"
-        , "#.............F....#"
-        , "####################"
-        ]
+    arenaMap
 
 
+-- | Original first development worm kept for backwards compatibility.
 testWorm :: Worm
 testWorm =
-    Worm
-        { wormId = 1
-        , wormBody = [(3, 1), (2, 1), (1, 1)]
-        , wormDirection = East
-        , wormAlive = True
-        , wormStats = initialWormStats
-        }
+    arenaWormOne
 
 
+-- | Original second development worm kept for backwards compatibility.
 testAiWorm :: Worm
-testAiWorm = 
-    Worm
-        { wormId = 2
-        , wormBody = [(16, 7), (17, 7), (18, 7)]
-        , wormDirection = West
-        , wormAlive = True
-        , wormStats = initialWormStats
-        }
+testAiWorm =
+    arenaWormTwo
 
 
+-- | Original development game state kept for backwards compatibility.
 testGame :: GameState
-testGame = 
-    GameState
-        {
-            gameMap = testMap,
-            gameWorms = [testWorm, testAiWorm],
-            gameTick = 0
-        }
+testGame =
+    scenarioInitialState arenaScenario

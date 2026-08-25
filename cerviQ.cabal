@@ -28,6 +28,8 @@ executable cerviQ
     Agent
     Config
     Maps
+    Scenario
+    Scenarios
     Evaluation
     QLearning
     QLearning.Core
