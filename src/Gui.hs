@@ -18,9 +18,30 @@ import Graphics.Gloss.Interface.IO.Game
 -- GUI configuration
 -- -----------------------------------------------------------------------------
 
--- | Size of one map cell in pixels.
-cellSize :: Float
-cellSize = 40
+-- | Maximum size of one map cell in pixels.
+maxCellSize :: Float
+maxCellSize = 40
+
+
+-- | Maximum width available for the game board.
+boardMaxWidth :: Float
+boardMaxWidth = 820
+
+
+-- | Maximum height available for the game board.
+boardMaxHeight :: Float
+boardMaxHeight = 680
+
+
+-- | Computes a map cell size that fits the complete map into the game area.
+cellSizeForMap :: GameMap -> Float
+cellSizeForMap gameMap' =
+    min
+        maxCellSize
+        ( min
+            (boardMaxWidth / fromIntegral (mapWidth gameMap'))
+            (boardMaxHeight / fromIntegral (mapHeight gameMap'))
+        )
 
 -- | Width of the initial GUI window.
 windowWidth :: Int
@@ -392,16 +413,17 @@ mapPositionToScreen :: GameMap -> Position -> (Float, Float)
 mapPositionToScreen gameMap' (x, y) =
     (screenX, screenY)
   where
+    cellSize = cellSizeForMap gameMap'
+
     mapPixelWidth = fromIntegral (mapWidth gameMap') * cellSize
     mapPixelHeight = fromIntegral (mapHeight gameMap') * cellSize
     
-    screenX = fromIntegral x * cellSize - mapPixelWidth/2 + cellSize/2
-    screenY = mapPixelHeight/2 - fromIntegral y * cellSize - cellSize/2
-
+    screenX = fromIntegral x * cellSize - mapPixelWidth / 2 + cellSize / 2
+    screenY = mapPixelHeight / 2 - fromIntegral y * cellSize - cellSize / 2
 
 -- | Draws one square map cell.
-drawCell :: Color -> Picture
-drawCell cellColor =
+drawCell :: Float -> Color -> Picture
+drawCell cellSize cellColor =
     color cellColor $
         rectangleSolid
             (cellSize - 2)
@@ -423,7 +445,7 @@ drawTile gameMap' position =
             let (screenX, screenY) = mapPositionToScreen gameMap' position
             in
                 translate screenX screenY $
-                    drawCell (tileColor tile)
+                    drawCell (cellSizeForMap gameMap') (tileColor tile)
 
 -- | Draws all cells of the game map.
 drawMap :: GameMap -> Picture
@@ -435,7 +457,9 @@ drawMap gameMap' =
 -- | Draws one segment of a worm.
 drawWormSegment :: GameMap -> Color -> Position -> Picture
 drawWormSegment gameMap' segmentColor position =
-    let (screenX, screenY) = mapPositionToScreen gameMap' position
+    let
+        (screenX, screenY) = mapPositionToScreen gameMap' position
+        cellSize = cellSizeForMap gameMap'
     in
         translate screenX screenY $
             color segmentColor $
@@ -448,11 +472,16 @@ drawColoredWorm gameMap' wormColor' worm
     | otherwise =
         case wormBody worm of
             [] -> Blank
+
             headPosition : bodyPositions ->
-                pictures
-                    ( drawColoredWormSegment gameMap' wormColor' (cellSize * 0.38) headPosition
-                        : map (drawColoredWormSegment gameMap' wormColor' (cellSize * 0.29)) bodyPositions
-                    )
+                let cellSize = cellSizeForMap gameMap'
+                in
+                    pictures
+                        ( drawColoredWormSegment gameMap' wormColor' (cellSize * 0.38) headPosition
+                            : map
+                                (drawColoredWormSegment gameMap' wormColor' (cellSize * 0.29))
+                                bodyPositions
+                        )
 
 -- | Draws one worm segment.
 drawColoredWormSegment :: GameMap -> Color -> Float -> Position -> Picture
@@ -643,8 +672,7 @@ drawDebugInfo debugInfo =
                 drawGuiText panelLeftX (qHeaderY - 27) 0.10 white ("Left:     " ++ printf "%.3f" (qValueOf TurnLeft)),
                 drawGuiText panelLeftX (qHeaderY - 49) 0.10 white ("Straight: " ++ printf "%.3f" (qValueOf GoStraight)),
                 drawGuiText panelLeftX (qHeaderY - 71) 0.10 white ("Right:    " ++ printf "%.3f" (qValueOf TurnRight)),
-                drawGuiText panelLeftX (qHeaderY - 97) 0.10 white ("Best: " ++ show (Debug.debugBestActions debugInfo))
-            ]
+                drawGuiText panelLeftX (qHeaderY - 97) 0.10 white ("Q best: " ++ show (Debug.debugBestActions debugInfo))            ]
         )
   where
     stateLines = Debug.debugStateLines debugInfo

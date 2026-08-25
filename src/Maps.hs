@@ -123,19 +123,29 @@ parseRow y row = concatMap parseCell (zip [0..] row)
                 Nothing -> []
 
 -- | Builds a game map from its ASCII representation.
+--
+-- Every row must have the same width.
 fromAsciiMap :: [String] -> GameMap
 fromAsciiMap [] =
     error "Cannot create a game map from an empty ASCII map."
 
-fromAsciiMap stringMap@(firstRow : _) =
-    let
-        width = length firstRow
-        height = length stringMap
-        rows = zip [0..] stringMap
-        tiles = concatMap (uncurry parseRow) rows
-    in
-        GameMap
-            { mapWidth = width
-            , mapHeight = height
-            , mapTiles = Map.fromList tiles
-            }
+fromAsciiMap stringMap@(firstRow : _)
+    | null firstRow =
+        error "Cannot create a game map with empty rows."
+
+    | any ((/= width) . length) stringMap =
+        error "Cannot create a game map whose rows have different widths."
+
+    | otherwise =
+        let
+            height = length stringMap
+            rows = zip [0..] stringMap
+            tiles = concatMap (uncurry parseRow) rows
+        in
+            GameMap
+                { mapWidth = width
+                , mapHeight = height
+                , mapTiles = Map.fromList tiles
+                }
+  where
+    width = length firstRow

@@ -15,10 +15,10 @@ build-type:          Simple
 extra-source-files:  README.md
                      CHANGELOG.md
 
-executable cerviQ
-  hs-source-dirs:      src
-  main-is:             Main.hs
+
+common cerviq-common
   other-modules:
+    App
     Types
     Movement
     Collision
@@ -26,6 +26,7 @@ executable cerviQ
     Input
     Game
     Agent
+    AgentRegistry
     Config
     Maps
     Scenario
@@ -37,31 +38,47 @@ executable cerviQ
     QLearning.V1
     QLearning.V2
     QLearning.V3
+    QLearning.V4
     Render
     Training
+    TrainingEnvironment
     TestData
     Gui
+
   default-language:    Haskell2010
-  build-depends:       
+
+  build-depends:
     base >= 4.7 && < 5,
     containers,
     random,
     gloss,
-    time ^>=1.12.2,
-
-
+    time ^>=1.12.2
 
   ghc-options:         -Wall
                        -Wcompat
                        -Widentities
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
-                       -Wmissing-export-lists
                        -Wmissing-home-modules
                        -Wpartial-fields
                        -Wredundant-constraints
                        -Wno-missing-export-lists
                        -threaded
+                       -O2
+
+
+executable cerviQ
+  import:              cerviq-common
+  hs-source-dirs:      src
+  main-is:             Main.hs
+
+
+executable cerviq-train-v4
+  import:              cerviq-common
+  hs-source-dirs:      app
+                       src
+  main-is:             TrainV4.hs
+
 
 source-repository head
   type:     git
