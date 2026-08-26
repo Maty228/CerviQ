@@ -45,6 +45,7 @@ common cerviq-common
     TestData
     PlayGui
     Gui
+    Viewport
 
   default-language:    Haskell2010
 

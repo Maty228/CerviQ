@@ -1,11 +1,12 @@
 module Gui where
 
-import Maps ( tileAt, allMapPositions )
+import Maps ( tileAt, allMapPositions, foodPositions )
 import Movement ()
 import Types
 import Config ( maxFoodCount )
 import Controller ( collectActions )
 import Game ( maintainFoodCount, stepGame )
+import Viewport
 
 import qualified QLearning.Core as Core
 import qualified QLearning.Debug as Debug
@@ -453,6 +454,33 @@ drawMap gameMap' =
     pictures
         [ drawTile gameMap' position | position <- allMapPositions gameMap']
 
+-- | Draws one map tile using viewport-relative coordinates.
+drawTileViewport :: Viewport -> GameMap -> Position -> Picture
+drawTileViewport viewport gameMap' position =
+    case tileAt gameMap' position of
+        Nothing ->
+            Blank
+
+        Just tile ->
+            let
+                (screenX, screenY) =
+                    viewportPositionToScreen viewport position
+
+            in
+                translate screenX screenY $
+                    drawCell
+                        (viewportCellSize viewport)
+                        (tileColor tile)
+
+
+-- | Draws only the currently visible cells of a game map.
+drawMapViewport :: Viewport -> GameMap -> Picture
+drawMapViewport viewport gameMap' =
+    pictures
+        [
+            drawTileViewport viewport gameMap' position
+            | position <- viewportPositions viewport
+        ]
 
 -- | Draws one segment of a worm.
 drawWormSegment :: GameMap -> Color -> Position -> Picture
@@ -493,21 +521,243 @@ drawColoredWormSegment gameMap' segmentColor radius position =
             color segmentColor $
                 circleSolid radius
 
--- | Draws the complete game state with agent-specific worm colors.
-drawGameStateForGui :: GuiWorld -> Picture
-drawGameStateForGui world =
-    pictures
-        [
-            drawMap currentMap,
+-- | Draws one worm segment using viewport-relative coordinates.
+drawColoredWormSegmentViewport :: Viewport -> Color -> Float -> Position -> Picture
+drawColoredWormSegmentViewport viewport segmentColor radius position =
+    let
+        (screenX, screenY) =
+            viewportPositionToScreen viewport position
+
+    in
+        translate screenX screenY $
+            color segmentColor $
+                circleSolid radius
+
+
+-- | Draws the visible part of one living worm inside the viewport.
+drawColoredWormViewport :: Viewport -> Color -> Worm -> Picture
+drawColoredWormViewport viewport wormColor' worm
+    | not (wormAlive worm) =
+        Blank
+
+    | otherwise =
+        case wormBody worm of
+            [] ->
+                Blank
+
+            headPosition : bodyPositions ->
+                let
+                    cellSize =
+                        viewportCellSize viewport
+
+                    visibleBody =
+                        filter
+                            (positionInViewport viewport)
+                            bodyPositions
+
+                    headPicture =
+                        if positionInViewport viewport headPosition
+                            then
+                                [
+                                    drawColoredWormSegmentViewport
+                                        viewport
+                                        wormColor'
+                                        (cellSize * 0.38)
+                                        headPosition
+                                ]
+                            else
+                                []
+
+                in
+                    pictures
+                        ( headPicture
+                            ++ map
+                                ( drawColoredWormSegmentViewport
+                                    viewport
+                                    wormColor'
+                                    (cellSize * 0.29)
+                                )
+                                visibleBody
+                        )
+
+
+-- -----------------------------------------------------------------------------
+-- Viewport indicators
+-- -----------------------------------------------------------------------------
+
+-- | Draws an arrow at the viewport edge pointing towards an off-screen map
+-- position.
+drawOffscreenIndicator :: Float -> Viewport -> Position -> Position -> Color -> String -> Picture
+drawOffscreenIndicator inset viewport focusPosition targetPosition indicatorColor label =
+    case
+        offscreenIndicatorPlacement
+            inset
+            viewport
+            focusPosition
+            targetPosition
+    of
+        Nothing ->
+            Blank
+
+        Just (indicatorX, indicatorY, angle) ->
             pictures
                 [
-                    drawColoredWorm currentMap (wormColor (guiAgents world) worm) worm
-                    | worm <- gameWorms currentState
+                    translate indicatorX indicatorY $
+                        rotate (-angle) $
+                            color indicatorColor $
+                                polygon
+                                    [
+                                        (13, 0),
+                                        (-9, 8),
+                                        (-9, -8)
+                                    ],
+
+                    drawGuiText
+                        labelX
+                        labelY
+                        0.085
+                        indicatorColor
+                        label
                 ]
-        ]
+          where
+            angleRadians =
+                angle * pi / 180
+
+            labelX =
+                indicatorX
+                    - cos angleRadians * 28
+                    - 5
+
+            labelY =
+                indicatorY
+                    - sin angleRadians * 28
+                    - 5
+
+
+-- | Draws an indicator pointing towards the geometrically nearest food when
+-- that food lies outside the viewport.
+drawNearestFoodIndicator :: Viewport -> GameMap -> Position -> Picture
+drawNearestFoodIndicator viewport gameMap' focusPosition =
+    case nearestPosition focusPosition (foodPositions gameMap') of
+        Nothing ->
+            Blank
+
+        Just nearestFood ->
+            drawOffscreenIndicator
+                foodIndicatorInset
+                viewport
+                focusPosition
+                nearestFood
+                green
+                "F"
+
+
+-- | Draws indicators for living worms outside the viewport together with the
+-- nearest off-screen food relative to the selected worm.
+drawGuiViewportIndicators :: GuiWorld -> Viewport -> GameState -> Position -> Picture
+drawGuiViewportIndicators world viewport state focusPosition =
+    pictures
+        (
+            drawNearestFoodIndicator
+                viewport
+                (gameMap state)
+                focusPosition
+
+            : [
+                drawOffscreenIndicator
+                    opponentIndicatorInset
+                    viewport
+                    focusPosition
+                    headPosition
+                    (wormColor (guiAgents world) worm)
+                    (show (wormId worm))
+                | worm <- gameWorms state,
+                  wormAlive worm,
+                  wormId worm /= guiSelectedWormId world,
+                  headPosition : _ <- [wormBody worm]
+              ]
+        )
+
+
+-- | Returns the head position of the selected GUI worm when available.
+selectedWormPosition :: GuiWorld -> GameState -> Maybe Position
+selectedWormPosition world state =
+    case
+        filter
+            ((== guiSelectedWormId world) . wormId)
+            (gameWorms state)
+    of
+        worm : _ ->
+            case wormBody worm of
+                headPosition : _ -> Just headPosition
+                [] -> Nothing
+
+        [] ->
+            Nothing
+
+
+-- | Returns the center position of a game map.
+mapCenterPosition :: GameMap -> Position
+mapCenterPosition gameMap' =
+    (
+        mapWidth gameMap' `div` 2,
+        mapHeight gameMap' `div` 2
+    )
+
+-- | Draws the complete game state with agent-specific worm colors.
+--
+-- Small maps are shown completely. Large maps use a viewport centered on the
+-- currently selected worm.
+drawGameStateForGui :: GuiWorld -> Picture
+drawGameStateForGui world
+    | usesViewport currentMap =
+        pictures
+            [
+                drawMapViewport viewport currentMap,
+
+                pictures
+                    [
+                        drawColoredWormViewport
+                            viewport
+                            (wormColor (guiAgents world) worm)
+                            worm
+                        | worm <- gameWorms currentState
+                    ],
+
+                drawGuiViewportIndicators
+                    world
+                    viewport
+                    currentState
+                    focusPosition
+            ]
+
+    | otherwise =
+        pictures
+            [
+                drawMap currentMap,
+                pictures
+                    [
+                        drawColoredWorm
+                            currentMap
+                            (wormColor (guiAgents world) worm)
+                            worm
+                        | worm <- gameWorms currentState
+                    ]
+            ]
   where
-    currentState = snapshotGameState (guiCurrent world)
-    currentMap = gameMap currentState
+    currentState =
+        snapshotGameState (guiCurrent world)
+
+    currentMap =
+        gameMap currentState
+
+    focusPosition =
+        case selectedWormPosition world currentState of
+            Just position -> position
+            Nothing -> mapCenterPosition currentMap
+
+    viewport =
+        viewportAround currentMap focusPosition
 
 
 -- | Draws one scaled line of text.
@@ -698,7 +948,7 @@ drawGuiStatus world =
             drawGuiText panelLeftX 300 0.11 white ("Tick: " ++ show (gameTick currentState)),
             drawGuiText (panelLeftX + 120) statusY 0.11 statusColor statusText,
             drawGuiText (panelLeftX + 235) 300 0.11 white ("Speed: " ++ printf "%.2fx" (guiSpeed world)),
-            drawGuiText panelLeftX (-335) 0.085 (greyN 0.7) "SPACE play/pause | arrows step | R restart | +/- speed | 1-9 select"
+            drawGuiText panelLeftX (-335) 0.085 (greyN 0.7) "SPACE play/pause | arrows step | R restart | +/- speed | 1-9 select/focus"
         ]
   where
     currentState = snapshotGameState (guiCurrent world)

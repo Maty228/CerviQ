@@ -6,10 +6,15 @@ import Game (maintainFoodCount, stepGame)
 import Gui
     ( boardOffsetX
     , drawColoredWorm
+    , drawColoredWormViewport
     , drawGuiText
     , drawMap
+    , drawMapViewport
+    , drawNearestFoodIndicator
+    , drawOffscreenIndicator
     , panelLeftX
     )
+import Viewport
 import Types
 
 import Graphics.Gloss
@@ -352,6 +357,34 @@ updatePlayWorld deltaTime world
         1 / playSpeed world
 
 
+-- | Returns the map position the play-mode camera should follow.
+humanFocusPosition :: PlayWorld -> Position
+humanFocusPosition world =
+    case
+        findWormById
+            (playHumanWormId world)
+            currentState
+    of
+        Just worm ->
+            case wormBody worm of
+                headPosition : _ -> headPosition
+                [] -> fallbackPosition
+
+        Nothing ->
+            fallbackPosition
+  where
+    currentState =
+        playGameState world
+
+    currentMap =
+        gameMap currentState
+
+    fallbackPosition =
+        (
+            mapWidth currentMap `div` 2,
+            mapHeight currentMap `div` 2
+        )
+
 -- -----------------------------------------------------------------------------
 -- Drawing
 -- -----------------------------------------------------------------------------
@@ -365,26 +398,56 @@ playWormColor world worm
 
 
 -- | Draws the current game board for human-versus-agent gameplay.
+--
+-- Small maps are shown completely. Large maps use a viewport centered on the
+-- human-controlled worm.
 drawPlayGameState :: PlayWorld -> Picture
-drawPlayGameState world =
-    pictures
-        [
-            drawMap currentMap,
-            pictures
-                [
-                    drawColoredWorm
-                        currentMap
-                        (playWormColor world worm)
-                        worm
-                    | worm <- gameWorms currentState
-                ]
-        ]
+drawPlayGameState world
+    | usesViewport currentMap =
+        pictures
+            [
+                drawMapViewport viewport currentMap,
+
+                pictures
+                    [
+                        drawColoredWormViewport
+                            viewport
+                            (playWormColor world worm)
+                            worm
+                        | worm <- gameWorms currentState
+                    ],
+
+                drawPlayViewportIndicators
+                    world
+                    viewport
+                    currentState
+                    (humanFocusPosition world)
+            ]
+
+    | otherwise =
+        pictures
+            [
+                drawMap currentMap,
+                pictures
+                    [
+                        drawColoredWorm
+                            currentMap
+                            (playWormColor world worm)
+                            worm
+                        | worm <- gameWorms currentState
+                    ]
+            ]
   where
     currentState =
         playGameState world
 
     currentMap =
         gameMap currentState
+
+    viewport =
+        viewportAround
+            currentMap
+            (humanFocusPosition world)
 
 
 -- | Draws one worm's basic gameplay statistics.
@@ -462,3 +525,41 @@ drawPlayWorld world =
                 drawPlayStatus world
             ]
         )
+
+
+-- | Draws off-screen navigation indicators relative to the human-controlled
+-- worm.
+drawPlayViewportIndicators :: PlayWorld -> Viewport -> GameState -> Position -> Picture
+drawPlayViewportIndicators world viewport state focusPosition =
+    pictures
+        [
+            opponentIndicator,
+            drawNearestFoodIndicator
+                viewport
+                (gameMap state)
+                focusPosition
+        ]
+  where
+    opponentIndicator =
+        case
+            findWormById
+                (playOpponentWormId world)
+                state
+        of
+            Just opponent ->
+                case wormBody opponent of
+                    headPosition : _
+                        | wormAlive opponent ->
+                            drawOffscreenIndicator
+                                opponentIndicatorInset
+                                viewport
+                                focusPosition
+                                headPosition
+                                opponentColor
+                                "AI"
+
+                    _ ->
+                        Blank
+
+            Nothing ->
+                Blank
