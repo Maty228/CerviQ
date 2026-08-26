@@ -2,6 +2,7 @@ module App where
 
 import AgentRegistry
 import Gui
+import PlayGui
 import Scenario
 import Scenarios
 import Types
@@ -61,6 +62,7 @@ data MenuWorld = MenuWorld
 data AppWorld
     = AppMenu MenuWorld
     | AppWatch MenuWorld GuiWorld
+    | AppPlay MenuWorld PlayWorld
 
 
 -- -----------------------------------------------------------------------------
@@ -86,7 +88,7 @@ initialMenuWorld agentOptions =
             menuAgentOneIndex = agentIndexByName "Q-learning V3 20k + fallback" agentOptions,
             menuAgentTwoIndex = agentIndexByName "Safe Greedy Food" agentOptions,
             menuWatchField = WatchMapField,
-            menuPlayOpponentIndex = agentIndexByName "Q-learning V3 20k + fallback" agentOptions,
+            menuPlayOpponentIndex = agentIndexByName "Q-learning V4 Reformed 30k + fallback" agentOptions,
             menuPlayField = PlayMapField
         }
 
@@ -129,11 +131,7 @@ itemAt index values
 -- -----------------------------------------------------------------------------
 
 -- | Creates a debugger world from the current Watch Agents menu selection.
-startWatch
-    :: [AgentOption]
-    -> [Scenario]
-    -> MenuWorld
-    -> Maybe AppWorld
+startWatch :: [AgentOption] -> [Scenario] -> MenuWorld -> Maybe AppWorld
 startWatch agentOptions scenarios menu = do
     scenario <- itemAt (menuScenarioIndex menu) scenarios
     firstOption <- itemAt (menuAgentOneIndex menu) agentOptions
@@ -154,6 +152,31 @@ startWatch agentOptions scenarios menu = do
 
         _ -> Nothing
 
+-- -----------------------------------------------------------------------------
+-- Play setup
+-- -----------------------------------------------------------------------------
+
+-- | Creates a human-versus-agent world from the current Play menu selection.
+startPlay :: [AgentOption] -> [Scenario] -> MenuWorld -> Maybe AppWorld
+startPlay agentOptions scenarios menu = do
+    scenario <- itemAt (menuScenarioIndex menu) scenarios
+    opponentOption <- itemAt (menuPlayOpponentIndex menu) agentOptions
+
+    case map wormId (scenarioWorms scenario) of
+        humanId : opponentId : _ ->
+            Just
+                ( AppPlay
+                    menu
+                    ( initialPlayWorld
+                        humanId
+                        opponentId
+                        (agentOptionName opponentOption)
+                        (agentOptionController opponentOption)
+                        (scenarioInitialState scenario)
+                    )
+                )
+
+        _ -> Nothing
 
 -- -----------------------------------------------------------------------------
 -- Main menu input
@@ -268,17 +291,26 @@ handlePlaySetupEvent agentOptions scenarios (EventKey (SpecialKey KeyRight) Down
             )
         )
 
-handlePlaySetupEvent _ _ (EventKey (SpecialKey KeyEnter) Down _ _) menu =
+handlePlaySetupEvent agentOptions scenarios (EventKey (SpecialKey KeyEnter) Down _ _) menu =
     case menuPlayField menu of
-        PlayBackField -> pure ( AppMenu menu { menuScreen = MainMenuScreen } )
+        PlayStartField ->
+            case startPlay agentOptions scenarios menu of
+                Just world -> pure world
+                Nothing -> pure (AppMenu menu)
 
-        _ -> pure (AppMenu menu)
+        PlayBackField ->
+            pure ( AppMenu menu { menuScreen = MainMenuScreen } )
+
+        _ ->
+            pure (AppMenu menu)
 
 handlePlaySetupEvent _ _ (EventKey (SpecialKey KeyEsc) Down _ _) menu =
     pure ( AppMenu menu { menuScreen = MainMenuScreen } )
 
 handlePlaySetupEvent _ _ _ menu =
     pure (AppMenu menu)
+
+
 
 
 -- -----------------------------------------------------------------------------
@@ -305,6 +337,13 @@ handleAppEvent _ _ event (AppWatch menu guiWorld) = do
 
     pure (AppWatch menu updatedGuiWorld)
 
+handleAppEvent _ _ (EventKey (SpecialKey KeyEsc) Down _ _) (AppPlay menu _) =
+    pure ( AppMenu menu { menuScreen = PlaySetupScreen } )
+
+handleAppEvent _ _ event (AppPlay menu playWorld) = do
+    updatedPlayWorld <- handlePlayEvent event playWorld
+
+    pure (AppPlay menu updatedPlayWorld)
 
 -- -----------------------------------------------------------------------------
 -- Menu drawing
@@ -367,7 +406,7 @@ drawWatchSetup agentOptions scenarios menu =
             Nothing -> "No agent"
 
 
--- | Draws the preliminary Play setup screen.
+-- | Draws the Play setup screen.
 drawPlaySetup :: [AgentOption] -> [Scenario] -> MenuWorld -> Picture
 drawPlaySetup agentOptions scenarios menu =
     pictures
@@ -375,10 +414,11 @@ drawPlaySetup agentOptions scenarios menu =
             drawGuiText (-300) 270 0.27 white "Play vs Agent",
             drawMenuRow (menuPlayField menu == PlayMapField) 130 ("Map: " ++ selectedScenarioName),
             drawMenuRow (menuPlayField menu == PlayOpponentField) 70 ("Opponent: " ++ selectedOpponentName),
-            drawMenuRow (menuPlayField menu == PlayStartField) (-20) "Start - coming next",
+            drawMenuRow (menuPlayField menu == PlayStartField) (-20) "Start",
             drawMenuRow (menuPlayField menu == PlayBackField) (-80) "Back",
-            drawGuiText (-300) (-230) 0.12 yellow "Human controls will be connected in the next step.",
-            drawGuiText (-300) (-290) 0.11 (greyN 0.7) "UP/DOWN field | LEFT/RIGHT value | ESC back"
+            drawGuiText (-300) (-210) 0.11 (greyN 0.7) "In game: ARROWS move | SPACE start/pause",
+            drawGuiText (-300) (-235) 0.11 (greyN 0.7) "R restart | +/- speed | ESC back",
+            drawGuiText (-300) (-290) 0.11 (greyN 0.7) "UP/DOWN field | LEFT/RIGHT value | ENTER confirm | ESC back"
         ]
   where
     selectedScenarioName =
@@ -413,6 +453,9 @@ drawAppWorld agentOptions scenarios (AppMenu menu) =
 drawAppWorld _ _ (AppWatch _ guiWorld) =
     drawGuiWorld guiWorld
 
+drawAppWorld _ _ (AppPlay _ playWorld) =
+    drawPlayWorld playWorld
+
 
 -- | Updates the currently active part of the application.
 updateAppWorld :: Float -> AppWorld -> IO AppWorld
@@ -422,6 +465,10 @@ updateAppWorld _ world@(AppMenu _) =
 updateAppWorld deltaTime (AppWatch menu guiWorld) = do
     updatedGuiWorld <- updateGuiWorld deltaTime guiWorld
     pure (AppWatch menu updatedGuiWorld)
+
+updateAppWorld deltaTime (AppPlay menu playWorld) = do
+    updatedPlayWorld <- updatePlayWorld deltaTime playWorld
+    pure (AppPlay menu updatedPlayWorld)
 
 
 -- -----------------------------------------------------------------------------
