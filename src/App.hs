@@ -85,7 +85,7 @@ initialMenuWorld agentOptions =
             menuScreen = MainMenuScreen,
             menuMainSelection = 0,
             menuScenarioIndex = 0,
-            menuAgentOneIndex = agentIndexByName "Q-learning V3 20k + fallback" agentOptions,
+            menuAgentOneIndex = agentIndexByName "Q-learning V4 Reformed 30k + fallback" agentOptions,
             menuAgentTwoIndex = agentIndexByName "Safe Greedy Food" agentOptions,
             menuWatchField = WatchMapField,
             menuPlayOpponentIndex = agentIndexByName "Q-learning V4 Reformed 30k + fallback" agentOptions,
@@ -349,18 +349,10 @@ handleAppEvent _ _ event (AppPlay menu playWorld) = do
 -- Menu drawing
 -- -----------------------------------------------------------------------------
 
--- | Returns yellow when a menu row is selected and white otherwise.
-menuTextColor :: Bool -> Color
-menuTextColor selected =
-    if selected
-        then yellow
-        else white
-
-
 -- | Draws one row of a menu.
 drawMenuRow :: Bool -> Float -> String -> Picture
 drawMenuRow selected y contents =
-    drawGuiText (-260) y 0.18 (menuTextColor selected) ((if selected then "> " else "  ") ++ contents)
+    drawMenuOptionRow (-290) y 580 selected contents
 
 
 -- | Draws the main CerviQ menu.
@@ -368,11 +360,12 @@ drawMainMenu :: MenuWorld -> Picture
 drawMainMenu menu =
     pictures
         [
-            drawGuiText (-255) 230 0.34 white "CerviQ",
-            drawMenuRow (menuMainSelection menu == 0) 80 "Watch agents",
-            drawMenuRow (menuMainSelection menu == 1) 20 "Play vs agent",
-            drawMenuRow (menuMainSelection menu == 2) (-40) "Quit",
-            drawGuiText (-260) (-290) 0.11 (greyN 0.7) "UP/DOWN select | ENTER confirm"
+            drawPanel (-360) 275 720 470,
+            drawTitle (-285) 205 "CerviQ" "Q-learning worm arena",
+            drawMenuRow (menuMainSelection menu == 0) 95 "Watch Agents",
+            drawMenuRow (menuMainSelection menu == 1) 40 "Play vs Agent",
+            drawMenuRow (menuMainSelection menu == 2) (-15) "Quit",
+            drawFooter (-285) (-150) ["UP/DOWN select", "ENTER confirm"]
         ]
 
 
@@ -381,13 +374,14 @@ drawWatchSetup :: [AgentOption] -> [Scenario] -> MenuWorld -> Picture
 drawWatchSetup agentOptions scenarios menu =
     pictures
         [
-            drawGuiText (-300) 270 0.27 white "Watch Agents",
-            drawMenuRow (menuWatchField menu == WatchMapField) 140 ("Map: " ++ selectedScenarioName),
-            drawMenuRow (menuWatchField menu == WatchAgentOneField) 80 ("Worm 1: " ++ firstAgentName),
-            drawMenuRow (menuWatchField menu == WatchAgentTwoField) 20 ("Worm 2: " ++ secondAgentName),
-            drawMenuRow (menuWatchField menu == WatchStartField) (-70) "Start",
-            drawMenuRow (menuWatchField menu == WatchBackField) (-130) "Back",
-            drawGuiText (-300) (-280) 0.11 (greyN 0.7) "UP/DOWN field | LEFT/RIGHT value | ENTER confirm | ESC back"
+            drawPanel (-395) 325 790 620,
+            drawTitle (-325) 255 "Watch Agents" "Compare two controllers and inspect their decisions.",
+            drawSettingRow (-325) 150 650 (menuWatchField menu == WatchMapField) "Map" selectedScenarioName,
+            drawSettingRow (-325) 72 650 (menuWatchField menu == WatchAgentOneField) "Worm 1" firstAgentName,
+            drawSettingRow (-325) (-6) 650 (menuWatchField menu == WatchAgentTwoField) "Worm 2" secondAgentName,
+            drawActionRow (-325) (-108) 650 (menuWatchField menu == WatchStartField) "Start",
+            drawActionRow (-325) (-160) 650 (menuWatchField menu == WatchBackField) "Back",
+            drawFooter (-325) (-245) ["UP/DOWN field", "LEFT/RIGHT value", "ENTER confirm", "ESC back"]
         ]
   where
     selectedScenarioName =
@@ -411,14 +405,14 @@ drawPlaySetup :: [AgentOption] -> [Scenario] -> MenuWorld -> Picture
 drawPlaySetup agentOptions scenarios menu =
     pictures
         [
-            drawGuiText (-300) 270 0.27 white "Play vs Agent",
-            drawMenuRow (menuPlayField menu == PlayMapField) 130 ("Map: " ++ selectedScenarioName),
-            drawMenuRow (menuPlayField menu == PlayOpponentField) 70 ("Opponent: " ++ selectedOpponentName),
-            drawMenuRow (menuPlayField menu == PlayStartField) (-20) "Start",
-            drawMenuRow (menuPlayField menu == PlayBackField) (-80) "Back",
-            drawGuiText (-300) (-210) 0.11 (greyN 0.7) "In game: ARROWS move | SPACE start/pause",
-            drawGuiText (-300) (-235) 0.11 (greyN 0.7) "R restart | +/- speed | ESC back",
-            drawGuiText (-300) (-290) 0.11 (greyN 0.7) "UP/DOWN field | LEFT/RIGHT value | ENTER confirm | ESC back"
+            drawPanel (-395) 325 790 620,
+            drawTitle (-325) 255 "Play vs Agent" "Control Worm 1 with global arrow movement.",
+            drawSettingRow (-325) 145 650 (menuPlayField menu == PlayMapField) "Map" selectedScenarioName,
+            drawSettingRow (-325) 67 650 (menuPlayField menu == PlayOpponentField) "Opponent" selectedOpponentName,
+            drawActionRow (-325) (-34) 650 (menuPlayField menu == PlayStartField) "Start",
+            drawActionRow (-325) (-86) 650 (menuPlayField menu == PlayBackField) "Back",
+            drawFooter (-325) (-160) ["In game: ARROWS move", "SPACE pause", "R restart", "+/- speed"],
+            drawFooter (-325) (-245) ["UP/DOWN field", "LEFT/RIGHT value", "ENTER confirm", "ESC back"]
         ]
   where
     selectedScenarioName =

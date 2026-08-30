@@ -5,14 +5,23 @@ import Controller (runController)
 import Game (maintainFoodCount, stepGame)
 import Gui
     ( boardOffsetX
+    , drawBox
     , drawColoredWorm
     , drawColoredWormViewport
+    , drawFooter
     , drawGuiText
     , drawMap
     , drawMapViewport
     , drawNearestFoodIndicator
     , drawOffscreenIndicator
+    , drawPanel
+    , drawSectionHeader
+    , drawStatLine
+    , drawStatusBadge
     , panelLeftX
+    , shortenText
+    , uiAccentColor
+    , uiMutedColor
     )
 import Viewport
 import Types
@@ -465,11 +474,11 @@ drawPlayWormStats y label labelColor maybeWorm =
         Just worm ->
             pictures
                 [
-                    drawGuiText panelLeftX y 0.13 labelColor label,
-                    drawGuiText panelLeftX (y - 28) 0.10 white ("Length: " ++ show (length (wormBody worm))),
-                    drawGuiText panelLeftX (y - 50) 0.10 white ("Food: " ++ show (foodEaten (wormStats worm))),
-                    drawGuiText panelLeftX (y - 72) 0.10 white ("Kills: " ++ show (kills (wormStats worm))),
-                    drawGuiText panelLeftX (y - 94) 0.10 white ("Age: " ++ show (age (wormStats worm)))
+                    drawSectionHeader panelLeftX y labelColor label,
+                    drawStatLine panelLeftX (y - 32) "Length" (show (length (wormBody worm))),
+                    drawStatLine panelLeftX (y - 56) "Food" (show (foodEaten (wormStats worm))),
+                    drawStatLine panelLeftX (y - 80) "Kills" (show (kills (wormStats worm))),
+                    drawStatLine panelLeftX (y - 104) "Age" (show (age (wormStats worm)))
                 ]
 
 
@@ -478,36 +487,43 @@ drawPlayStatus :: PlayWorld -> Picture
 drawPlayStatus world =
     pictures
         [
-            drawGuiText panelLeftX 325 0.19 white "Play vs Agent",
-            drawGuiText panelLeftX 285 0.13 resultColor (resultName (playResult world)),
-            drawGuiText panelLeftX 250 0.10 white ("Tick: " ++ show (gameTick currentState)),
-            drawGuiText panelLeftX 228 0.10 white ("Speed: " ++ printf "%.2f" (playSpeed world) ++ " ticks/s"),
-            drawGuiText panelLeftX 206 0.10 white ("Next action: " ++ actionName (playPendingAction world)),
-            drawGuiText panelLeftX 184 0.10 white ("State: " ++ if playPaused world then "Paused" else "Running"),
+            drawPanel 185 360 515 700,
+            drawGuiText panelLeftX 318 0.18 white "Play vs Agent",
+            drawStatusBadge 560 332 statusText resultColor,
+            drawStatLine panelLeftX 274 "Tick" (show (gameTick currentState)),
+            drawStatLine (panelLeftX + 205) 274 "Speed" (printf "%.2fx" (playSpeed world)),
 
             drawPlayWormStats
-                125
-                "You - Worm 1"
+                205
+                "You"
                 humanColor
                 (findWormById (playHumanWormId world) currentState),
 
             drawPlayWormStats
-                (-25)
-                ("Opponent - " ++ playOpponentName world)
+                45
+                ("Opponent - " ++ shortenText 30 (playOpponentName world))
                 opponentColor
                 (findWormById (playOpponentWormId world) currentState),
 
-            drawGuiText panelLeftX (-205) 0.10 (greyN 0.75) "ARROWS move | opposite direction ignored",
-            drawGuiText panelLeftX (-228) 0.10 (greyN 0.75) "SPACE start/pause | R restart",
-            drawGuiText panelLeftX (-251) 0.10 (greyN 0.75) "+/- speed | ESC back"
+            drawGuiText panelLeftX (-145) 0.085 uiMutedColor "Arrow controls use global directions. Opposite direction is ignored.",
+            drawFooter panelLeftX (-320) ["ARROWS move", "SPACE pause", "R restart", "+/- speed", "ESC back"]
         ]
   where
     currentState =
         playGameState world
 
+    statusText =
+        case playResult world of
+            PlayRunning ->
+                if playPaused world then "PAUSED" else "PLAYING"
+            PlayerWon -> "YOU WIN"
+            PlayerLost -> "GAME OVER"
+            PlayDraw -> "DRAW"
+
     resultColor =
         case playResult world of
-            PlayRunning -> white
+            PlayRunning ->
+                if playPaused world then uiAccentColor else green
             PlayerWon -> green
             PlayerLost -> red
             PlayDraw -> yellow
@@ -520,11 +536,67 @@ drawPlayWorld world =
         ( pictures
             [
                 translate boardOffsetX 0 $
-                    drawPlayGameState world,
+                    pictures
+                        [
+                            drawPlayGameState world,
+                            drawPlayGameOverOverlay world
+                        ],
 
                 drawPlayStatus world
             ]
         )
+
+
+-- | Draws a simple board-centered overlay when play mode has ended.
+drawPlayGameOverOverlay :: PlayWorld -> Picture
+drawPlayGameOverOverlay world
+    | playResult world == PlayRunning =
+        Blank
+
+    | otherwise =
+        pictures
+            [
+                drawBox (-225) 112 450 224 (makeColorI 5 7 10 220),
+                translate 0 0 $
+                    color uiBorder $
+                        rectangleWire 450 224,
+                drawGuiText titleX 58 0.23 titleColor title,
+                drawGuiText (-96) 8 0.10 white ("Food eaten: " ++ maybe "-" (show . foodEaten . wormStats) humanWorm),
+                drawGuiText (-96) (-18) 0.10 white ("Age: " ++ maybe "-" (show . age . wormStats) humanWorm),
+                drawGuiText (-130) (-70) 0.095 uiMutedColor "R restart     ESC back"
+            ]
+  where
+    currentState =
+        playGameState world
+
+    humanWorm =
+        findWormById
+            (playHumanWormId world)
+            currentState
+
+    title =
+        case playResult world of
+            PlayerWon -> "YOU WIN"
+            PlayerLost -> "GAME OVER"
+            PlayDraw -> "DRAW"
+            PlayRunning -> ""
+
+    titleColor =
+        case playResult world of
+            PlayerWon -> green
+            PlayerLost -> red
+            PlayDraw -> yellow
+            PlayRunning -> white
+
+    titleX =
+        case playResult world of
+            PlayerWon -> -96
+            PlayerLost -> -128
+            PlayDraw -> -55
+            PlayRunning -> 0
+
+    uiBorder =
+        makeColorI 130 136 148 255
 
 
 -- | Draws off-screen navigation indicators relative to the human-controlled
