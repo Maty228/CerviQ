@@ -44,3 +44,7 @@
 # Logs
 *.log
 .stack-work/stack.sqlite3
+.stack-work/
+
+# Statistics
+data/models/*_stats.txt
