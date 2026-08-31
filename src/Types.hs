@@ -3,8 +3,8 @@ Module      : Types
 Description : Core data types shared across the CerviQ project.
 
 This module defines the fundamental vocabulary of the game: map positions,
-directions, relative actions, map tiles, worms, complete game state, and the
-controller interface used by human and AI-controlled worms. Most other modules
+directions, relative actions, map tiles, worms, complete game state, and the 
+controller interface used by AI-controlled worms. Most other modules
 depend on these definitions.
 -}
 module Types where
@@ -151,7 +151,10 @@ data GameState = GameState
 type Agent = GameState -> Worm -> IO Action
 
 
--- | Source of decisions for one worm.
+-- | Wrapper around an AI agent used by controller-based game modes.
+--
+-- Human input in the graphical application is handled directly by 'PlayGui',
+-- while this type is used for AI opponents, evaluation, training, and the
+-- Watch Agents mode.
 data Controller
-    = Human
-    | AI Agent
+    = AI Agent

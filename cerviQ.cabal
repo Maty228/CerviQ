@@ -23,7 +23,6 @@ common cerviq-common
     Movement
     Collision
     Controller
-    Input
     Game
     Agent
     AgentRegistry
@@ -39,7 +38,6 @@ common cerviq-common
     QLearning.V2
     QLearning.V3
     QLearning.V4
-    Render
     Training
     TrainingEnvironment
     PlayGui
