@@ -1,10 +1,20 @@
+{-|
+Module      : Scenario
+Description : Definition, construction, and validation of game scenarios.
+
+A scenario combines a game map with the worms that should initially inhabit it.
+Controllers are deliberately not included, allowing the same environment to be
+used for human play, AI visualization, training, and evaluation. Before a
+scenario becomes a 'GameState', its initial configuration is validated.
+-}
+
 module Scenario where
 
 import Data.List (nub)
 
-import Maps ( isInsideMap, isEmptyTile )
-import Types
 import Game (initialHeadHistory)
+import Maps (isEmptyTile, isInsideMap)
+import Types
 
 
 -- -----------------------------------------------------------------------------
@@ -12,21 +22,28 @@ import Game (initialHeadHistory)
 -- -----------------------------------------------------------------------------
 
 -- | Complete static configuration of one game scenario.
---
--- Controllers are intentionally not part of a scenario. The same scenario can
--- therefore be used for human play, heuristic agents, Q-learning agents and
--- evaluation.
 data Scenario = Scenario
     {
+        -- | Human-readable scenario name.
         scenarioName :: String,
+
+        -- | Short explanation of the environment and its purpose.
         scenarioDescription :: String,
+
+        -- | Map used by the scenario.
         scenarioMap :: GameMap,
+
+        -- | Worms placed on the map at the beginning of the game.
         scenarioWorms :: [Worm]
     }
     deriving (Show, Eq)
 
 
--- | Default statistics of a newly spawned worm.
+-- -----------------------------------------------------------------------------
+-- Worm construction
+-- -----------------------------------------------------------------------------
+
+-- | Default statistics assigned to a newly created worm.
 emptyWormStats :: WormStats
 emptyWormStats =
     WormStats
@@ -37,6 +54,9 @@ emptyWormStats =
 
 
 -- | Creates a living worm with empty statistics.
+--
+-- The supplied body is expected to follow the project invariant that its first
+-- position represents the worm's head.
 freshWorm :: Int -> [Position] -> Direction -> Worm
 freshWorm targetId body direction =
     Worm
@@ -52,11 +72,11 @@ freshWorm targetId body direction =
 -- Scenario validation
 -- -----------------------------------------------------------------------------
 
--- | Returns validation errors found in a scenario.
+-- | Returns all validation errors found in a scenario.
 --
--- A valid scenario must contain at least one living worm, use unique worm IDs,
--- place every worm body entirely inside empty map tiles and avoid overlapping
--- worm bodies.
+-- A valid scenario contains at least one living worm, uses unique worm IDs,
+-- has non-empty and non-overlapping bodies, and places every body segment on an
+-- empty position inside the map.
 validateScenario :: Scenario -> [String]
 validateScenario scenario =
     concat
@@ -69,45 +89,42 @@ validateScenario scenario =
         , ["All worm body positions must start on empty tiles." | not (null blockedPositions)]
         ]
   where
-    gamemap = scenarioMap scenario
+    gameMap' = scenarioMap scenario
     worms = scenarioWorms scenario
     wormIds = map wormId worms
     bodyPositions = concatMap wormBody worms
 
     outsidePositions =
-        [ position
-        | position <- bodyPositions
-        , not (isInsideMap gamemap position)
-        ]
+        [ pos | pos <- bodyPositions, not (isInsideMap gameMap' pos) ]
 
     blockedPositions =
-        [ position
-        | position <- bodyPositions
-        , isInsideMap gamemap position
-        , not (isEmptyTile gamemap position)
+        [ pos
+        | pos <- bodyPositions
+        , isInsideMap gameMap' pos
+        , not (isEmptyTile gameMap' pos)
         ]
 
 
--- | Builds the initial game state of a scenario.
+-- -----------------------------------------------------------------------------
+-- Initial game state
+-- -----------------------------------------------------------------------------
+
+-- | Builds the initial game state represented by a scenario.
 --
--- Invalid manually defined scenarios fail immediately with their validation
--- errors instead of producing difficult-to-debug game behaviour later.
+-- Invalid manually defined scenarios fail immediately instead of allowing an
+-- inconsistent state to reach the game engine.
 scenarioInitialState :: Scenario -> GameState
 scenarioInitialState scenario =
     case validateScenario scenario of
         [] ->
             GameState
-                {
-                    gameMap = scenarioMap scenario,
-                    gameWorms = scenarioWorms scenario,
-                    gameTick = 0,
-                    gameHeadHistory = initialHeadHistory (scenarioWorms scenario)
+                { gameMap = scenarioMap scenario
+                , gameWorms = scenarioWorms scenario
+                , gameTick = 0
+                , gameHeadHistory = initialHeadHistory (scenarioWorms scenario)
                 }
-
         errors ->
             error
-                ( "Invalid scenario \""
-                    ++ scenarioName scenario
-                    ++ "\":\n"
+                ( "Invalid scenario \"" ++ scenarioName scenario ++ "\":\n"
                     ++ unlines (map ("  - " ++) errors)
                 )

@@ -42,7 +42,6 @@ common cerviq-common
     Render
     Training
     TrainingEnvironment
-    TestData
     PlayGui
     Gui
     Viewport

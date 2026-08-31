@@ -1,63 +1,33 @@
+{-|
+Module      : Game
+Description : High-level game-state updates and one-tick CerviQ simulation.
+
+This module coordinates the individual parts of the game engine. It prepares
+worm actions, determines growth, delegates simultaneous movement and collision
+resolution to "Collision", updates worm statistics and food, records recent
+head positions, and advances the global game tick.
+
+The central functions are 'stepGameDetailed' and 'stepGame'.
+-}
+
 module Game where
 
-import Types
+import Collision
 import Maps
 import Movement
-import Collision
-import qualified Data.Map as Map
+import Types
 
+import qualified Data.Map as Map
 import System.Random (randomRIO)
 
--- -----------------------------------------------------------------------------
--- Food handling
--- -----------------------------------------------------------------------------
-
--- | Returns True if executing the given action would move the worm onto food.
-wormWillEatFood :: GameMap -> Action -> Worm -> Bool
-wormWillEatFood currentMap action worm =
-    let newDirection = applyAction (wormDirection worm) action
-        turnedWorm = worm {wormDirection = newDirection}
-        newHead = nextHeadPosition turnedWorm
-    in isFood currentMap newHead
-
-
--- | Removes food eaten by the given worms.
-removeEatenFood :: [Worm] -> GameMap -> GameMap
-removeEatenFood worms currentMap = 
-    foldr removeFood currentMap (map wormHead worms)
-
 
 -- -----------------------------------------------------------------------------
--- Food spawning
+-- Actions and food consumption
 -- -----------------------------------------------------------------------------
 
--- | Checks whether food can be placed at the given position.
-isFreeForFood :: GameState -> Position -> Bool
-isFreeForFood state pos =
-    isEmptyTile stateMap pos &&
-    not (positionOccupied pos wormPositions)
-  where
-    stateMap = gameMap state
-    wormPositions = occupiedPositions (filter wormAlive (gameWorms state))
-
-
--- | Returns all valid positions where food may be spawned.
-freeFoodPositions :: GameState -> [Position]
-freeFoodPositions state = filter (isFreeForFood state) (allMapPositions (gameMap state))
-
-
--- | Places food on the given position.
-spawnFoodAt :: Position -> GameState -> GameState
-spawnFoodAt pos state =
-    state {gameMap = placeFood pos (gameMap state)}
-
-
--- -----------------------------------------------------------------------------
--- Action helpers
--- -----------------------------------------------------------------------------
-
--- | Returns the action assigned to the given worm.
--- If no action is specified, the worm continues straight.
+-- | Returns the action assigned to a worm.
+--
+-- A worm without an explicitly supplied action continues straight.
 actionForWorm :: [(Int, Action)] -> Worm -> Action
 actionForWorm actions worm =
     case lookup (wormId worm) actions of
@@ -65,92 +35,190 @@ actionForWorm actions worm =
         Nothing -> GoStraight
 
 
--- -----------------------------------------------------------------------------
--- Worm statistics
--- -----------------------------------------------------------------------------
-
--- | Increases the worm's age by one game tick.
-increaseAge :: Worm -> Worm
-increaseAge worm =
-    worm {
-        wormStats =
-            (wormStats worm) {age = age (wormStats worm) + 1}
-    }
+-- | Returns whether executing an action would move a worm onto food.
+wormWillEatFood :: GameMap -> Action -> Worm -> Bool
+wormWillEatFood currentMap action worm =
+    isFood currentMap (headAfterAction worm action)
 
 
--- | Increases the number of eaten food items.
-increaseFoodEaten :: Worm -> Worm
-increaseFoodEaten worm =
-    worm {
-        wormStats =
-            (wormStats worm) {foodEaten = foodEaten (wormStats worm) + 1}
-    }
-
-
--- | Returns True if the worm's head is currently on a food tile.
+-- | Returns whether a moved worm's head is currently on food.
 wormAteFood :: GameMap -> Worm -> Bool
 wormAteFood currentMap worm =
     isFood currentMap (wormHead worm)
 
 
--- | Increases the number of kills by the given amount.
-increaseKills :: Int -> Worm -> Worm
-increaseKills amount worm =
-    worm
-        { wormStats =
-            (wormStats worm)
-                { kills = kills (wormStats worm) + amount }
-        }
-
-
--- | Extracts the killer ID from a death reason, if there is one.
-killerFromDeath :: (Worm, DeathReason) -> Maybe Int
-killerFromDeath (_, HitOtherBody killerId) = Just killerId
-killerFromDeath _ = Nothing
-
-
--- | Counts how many kills should be awarded to the given worm.
-killCountForWorm :: [Int] -> Worm -> Int
-killCountForWorm killerIds worm =
-    length (filter (== wormId worm) killerIds)
-
-
--- | Applies kill rewards to a worm.
-applyKillStats :: [Int] -> Worm -> Worm
-applyKillStats killerIds worm =
-    increaseKills (killCountForWorm killerIds worm) worm
+-- | Removes food occupied by the heads of the given worms.
+removeEatenFood :: [Worm] -> GameMap -> GameMap
+removeEatenFood worms currentMap =
+    foldr removeFood currentMap (map wormHead worms)
 
 
 -- -----------------------------------------------------------------------------
 -- Food spawning
 -- -----------------------------------------------------------------------------
 
--- | Returns a random valid position for spawning food.
+-- | Returns whether food may be spawned at a position.
 --
--- Returns Nothing if no free position exists.
+-- Food can only be placed on an empty tile not occupied by a living worm.
+isFreeForFood :: GameState -> Position -> Bool
+isFreeForFood state pos =
+    isEmptyTile stateMap pos && not (positionOccupied pos wormPositions)
+  where
+    stateMap = gameMap state
+    wormPositions = occupiedPositions (filter wormAlive (gameWorms state))
+
+
+-- | Returns all positions currently suitable for spawning food.
+freeFoodPositions :: GameState -> [Position]
+freeFoodPositions state =
+    filter (isFreeForFood state) (allMapPositions (gameMap state))
+
+
+-- | Places food at a position without performing additional validation.
+spawnFoodAt :: Position -> GameState -> GameState
+spawnFoodAt pos state =
+    state {gameMap = placeFood pos (gameMap state)}
+
+
+-- | Returns a random currently valid position for spawning food.
+--
+-- Returns 'Nothing' if the map contains no free position.
 randomFoodPosition :: GameState -> IO (Maybe Position)
-randomFoodPosition state = do
-    let freePositions = freeFoodPositions state
-    case freePositions of
-        [] -> return Nothing
-        _ -> do 
+randomFoodPosition state =
+    case freeFoodPositions state of
+        [] -> pure Nothing
+        freePositions -> do
             index <- randomRIO (0, length freePositions - 1)
-            return (Just (freePositions !! index))
+            pure (Just (freePositions !! index))
 
 
--- | Ensures that at least the given number of food items
--- are present on the map.
+-- | Ensures that the map contains at least the requested number of food items.
+--
+-- Food is added recursively until the requested count is reached or no valid
+-- spawn position remains.
 maintainFoodCount :: Int -> GameState -> IO GameState
 maintainFoodCount maxFood state
-    | length (foodPositions (gameMap state)) >= maxFood = return state
+    | length (foodPositions (gameMap state)) >= maxFood = pure state
     | otherwise = do
         maybePosition <- randomFoodPosition state
         case maybePosition of
-            Nothing -> return state
+            Nothing -> pure state
             Just position -> maintainFoodCount maxFood (spawnFoodAt position state)
 
 
--- | Result of one game step including the updated state and deaths.
+-- -----------------------------------------------------------------------------
+-- Worm statistics
+-- -----------------------------------------------------------------------------
+
+-- | Increases a worm's age by one game tick.
+increaseAge :: Worm -> Worm
+increaseAge worm =
+    worm {wormStats = stats {age = age stats + 1}}
+  where
+    stats = wormStats worm
+
+
+-- | Increases a worm's number of eaten food items by one.
+increaseFoodEaten :: Worm -> Worm
+increaseFoodEaten worm =
+    worm {wormStats = stats {foodEaten = foodEaten stats + 1}}
+  where
+    stats = wormStats worm
+
+
+-- | Increases a worm's kill count by the given amount.
+increaseKills :: Int -> Worm -> Worm
+increaseKills amount worm =
+    worm {wormStats = stats {kills = kills stats + amount}}
+  where
+    stats = wormStats worm
+
+
+-- | Extracts the killer worm ID from a death caused by another worm's body.
+killerFromDeath :: (Worm, DeathReason) -> Maybe Int
+killerFromDeath (_, HitOtherBody killerId) = Just killerId
+killerFromDeath _ = Nothing
+
+
+-- | Counts deaths credited to a particular worm.
+killCountForWorm :: [Int] -> Worm -> Int
+killCountForWorm killerIds worm =
+    length (filter (== wormId worm) killerIds)
+
+
+-- | Applies all kills credited to a worm during the current tick.
+applyKillStats :: [Int] -> Worm -> Worm
+applyKillStats killerIds worm =
+    increaseKills (killCountForWorm killerIds worm) worm
+
+
+-- | Updates age, food, and kill statistics of a surviving moved worm.
+updateSurvivorStats :: GameMap -> [Int] -> Worm -> Worm
+updateSurvivorStats previousMap killerIds worm =
+    applyKillStats killerIds fedWorm
+  where
+    agedWorm = increaseAge worm
+    fedWorm
+        | wormAteFood previousMap worm = increaseFoodEaten agedWorm
+        | otherwise = agedWorm
+
+
+-- | Updates statistics of a worm that died during the current tick and marks it
+-- as no longer alive.
+updateDeadWorm :: [Int] -> Worm -> Worm
+updateDeadWorm killerIds worm =
+    (applyKillStats killerIds (increaseAge worm)) {wormAlive = False}
+
+
+-- -----------------------------------------------------------------------------
+-- Head history
+-- -----------------------------------------------------------------------------
+
+-- | Maximum number of recent head positions retained for each worm.
+headHistoryLimit :: Int
+headHistoryLimit = 256
+
+
+-- | Creates head-position history containing the current head of each worm.
+initialHeadHistory :: [Worm] -> Map.Map Int [Position]
+initialHeadHistory worms =
+    Map.fromList
+        [ (wormId worm, [headPosition])
+        | worm <- worms
+        , headPosition : _ <- [wormBody worm]
+        ]
+
+
+-- | Resets all stored head histories to the worms' current positions.
+resetHeadHistory :: GameState -> GameState
+resetHeadHistory state =
+    state {gameHeadHistory = initialHeadHistory (gameWorms state)}
+
+
+-- | Prepends each worm's current head to its stored history.
+--
+-- Only the most recent 'headHistoryLimit' positions are retained.
+recordHeadHistory :: [Worm] -> Map.Map Int [Position] -> Map.Map Int [Position]
+recordHeadHistory worms history =
+    foldr recordWorm history worms
+  where
+    recordWorm worm currentHistory =
+        case wormBody worm of
+            [] -> currentHistory
+            headPosition : _ ->
+                Map.insert
+                    (wormId worm)
+                    (take headHistoryLimit (headPosition : previousHistory))
+                    currentHistory
+              where
+                previousHistory = Map.findWithDefault [] (wormId worm) currentHistory
+
+
+-- -----------------------------------------------------------------------------
+-- Game simulation
+-- -----------------------------------------------------------------------------
+
+-- | Result of one game tick together with death events produced during it.
 data GameStepResult = GameStepResult
     {
         gameStepState :: GameState,
@@ -159,146 +227,63 @@ data GameStepResult = GameStepResult
     deriving (Show, Eq)
 
 
--- -----------------------------------------------------------------------------
--- Head history
--- -----------------------------------------------------------------------------
-
--- | Maximum number of recent head positions stored for each worm.
-headHistoryLimit :: Int
-headHistoryLimit = 256
-
-
--- | Creates the initial head-position history for a collection of worms.
-initialHeadHistory :: [Worm] -> Map.Map Int [Position]
-initialHeadHistory worms =
-    Map.fromList
-        [
-            (wormId worm, [headPosition])
-            | worm <- worms,
-              headPosition : _ <- [wormBody worm]
-        ]
-
-
--- | Resets head-position history to the current position of every worm.
-resetHeadHistory :: GameState -> GameState
-resetHeadHistory state =
-    state
-        {
-            gameHeadHistory = initialHeadHistory (gameWorms state)
-        }
-
-
--- | Records the current head position of every worm.
-recordHeadHistory :: [Worm] -> Map.Map Int [Position] -> Map.Map Int [Position]
-recordHeadHistory worms history =
-    foldr recordWorm history worms
-  where
-    recordWorm worm currentHistory =
-        case wormBody worm of
-            [] -> currentHistory
-
-            headPosition : _ ->
-                let previousHistory =
-                        Map.findWithDefault [] (wormId worm) currentHistory
-
-                in
-                    Map.insert
-                        (wormId worm)
-                        (take headHistoryLimit (headPosition : previousHistory))
-                        currentHistory
-
-
--- -----------------------------------------------------------------------------
--- Game simulation
--- -----------------------------------------------------------------------------
-
--- | Advances the game by one tick and returns detailed information about deaths.
+-- | Prepares one living worm for simultaneous turn simulation.
 --
--- For each living worm:
---   * determines its action,
---   * checks whether it will grow,
---   * simulates movement and collisions,
---   * updates statistics,
---   * removes eaten food,
---   * increments the global game tick.
+-- The returned tuple contains whether the worm grows, its selected action, and
+-- its current state before movement.
+prepareWormMove :: GameMap -> [(Int, Action)] -> Worm -> (Bool, Action, Worm)
+prepareWormMove currentMap actions worm =
+    (wormWillEatFood currentMap action worm, action, worm)
+  where
+    action = actionForWorm actions worm
+
+
+-- | Advances the complete game by one tick and reports deaths from that tick.
+--
+-- One tick is processed in these phases:
+--
+-- 1. select an action and determine growth for every living worm;
+-- 2. move all living worms and resolve collisions simultaneously;
+-- 3. remove food eaten by surviving worms;
+-- 4. update worm statistics and alive status;
+-- 5. record head history and increment the global tick counter.
 stepGameDetailed :: [(Int, Action)] -> GameState -> GameStepResult
 stepGameDetailed actions state =
-    let currentMap = gameMap state
-        alive = filter wormAlive (gameWorms state)
-        alreadyDead = filter (not . wormAlive) (gameWorms state)
+    GameStepResult
+        {
+            gameStepState = updatedState,
+            gameStepDeaths = deathEvents
+        }
+  where
+    currentMap = gameMap state
+    aliveWorms = filter wormAlive (gameWorms state)
+    alreadyDeadWorms = filter (not . wormAlive) (gameWorms state)
 
-        moves =
-            map
-                (\worm ->
-                    let action = actionForWorm actions worm
-                        grows = wormWillEatFood currentMap action worm
-                    in (grows, action, worm)
-                )
-                alive
+    moves = map (prepareWormMove currentMap actions) aliveWorms
+    (survivors, deaths) = simulateTurn currentMap moves
 
-        (survivors, deaths) =
-            simulateTurn currentMap moves
+    collidedWorms = map fst deaths
+    killerIds = [killerId | death <- deaths, Just killerId <- [killerFromDeath death]]
+    deathEvents = [(wormId worm, reason) | (worm, reason) <- deaths]
 
-        collided =
-            map fst deaths
+    newMap = removeEatenFood survivors currentMap
+    updatedSurvivors = map (updateSurvivorStats currentMap killerIds) survivors
+    updatedCollided = map (updateDeadWorm killerIds) collidedWorms
+    updatedWorms = updatedSurvivors ++ updatedCollided ++ alreadyDeadWorms
 
-        killerIds =
-            [ killerId
-            | death <- deaths
-            , Just killerId <- [killerFromDeath death]
-            ]
+    updatedHeadHistory = recordHeadHistory updatedWorms (gameHeadHistory state)
 
-        deathEvents =
-            [ (wormId worm, reason)
-            | (worm, reason) <- deaths
-            ]
-
-        newMap = removeEatenFood survivors currentMap
-
-        updatedSurvivors =
-            map
-                (\worm ->
-                    let agedWorm = increaseAge worm
-                        fedWorm =
-                            if wormAteFood currentMap worm
-                                then increaseFoodEaten agedWorm
-                                else agedWorm
-                    in applyKillStats killerIds fedWorm
-                )
-                survivors
-
-        updatedCollided =
-            map
-                (\worm ->
-                    applyKillStats killerIds (increaseAge worm)
-                        { wormAlive = False }
-                )
-                collided
-
-        updatedWorms =
-            updatedSurvivors ++ updatedCollided ++ alreadyDead
-
-        updatedHeadHistory =
-            recordHeadHistory updatedWorms (gameHeadHistory state)
-
-        updatedState =
-            state
-                {
-                    gameMap = newMap,
-                    gameWorms = updatedWorms,
-                    gameTick = gameTick state + 1,
-                    gameHeadHistory = updatedHeadHistory
-                }
-
-    in
-        GameStepResult
+    updatedState =
+        state
             {
-                gameStepState = updatedState,
-                gameStepDeaths = deathEvents
+                gameMap = newMap,
+                gameWorms = updatedWorms,
+                gameTick = gameTick state + 1,
+                gameHeadHistory = updatedHeadHistory
             }
 
 
--- | Advances the game by one tick.
+-- | Advances the complete game by one tick and returns only the new game state.
 stepGame :: [(Int, Action)] -> GameState -> GameState
 stepGame actions state =
     gameStepState (stepGameDetailed actions state)

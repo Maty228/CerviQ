@@ -1,3 +1,16 @@
+{-|
+Module      : Viewport
+Description : Camera calculations for displaying large CerviQ maps.
+
+This module defines the rectangular camera used when a map is too large to show
+comfortably in full. It computes a viewport around a focused worm, converts map
+coordinates into viewport-relative Gloss coordinates, and provides geometry for
+off-screen food and opponent indicators.
+
+The viewport affects rendering only; the game state and AI agents always retain
+access to the complete map.
+-}
+
 module Viewport where
 
 import Types
@@ -8,15 +21,11 @@ import Types
 -- -----------------------------------------------------------------------------
 
 -- | Number of map cells visible horizontally in camera mode.
---
--- Change this value to make the viewport wider or narrower.
 viewportWidthCells :: Int
 viewportWidthCells = 30
 
 
 -- | Number of map cells visible vertically in camera mode.
---
--- Change this value to make the viewport taller or shorter.
 viewportHeightCells :: Int
 viewportHeightCells = 18
 
@@ -31,104 +40,101 @@ viewportMaxPixelHeight :: Float
 viewportMaxPixelHeight = 640
 
 
--- | Maximum size of one map cell in viewport mode.
+-- | Maximum rendered size of one map cell.
 viewportMaxCellSize :: Float
 viewportMaxCellSize = 40
 
--- | Distance in pixels between an opponent indicator and the viewport edge.
+
+-- | Distance between an opponent indicator and the viewport edge.
 opponentIndicatorInset :: Float
 opponentIndicatorInset = 14
 
 
--- | Distance in pixels between the nearest-food indicator and the viewport
--- edge. Food is drawn slightly farther inward so overlapping indicators remain
--- easier to distinguish.
+-- | Distance between the nearest-food indicator and the viewport edge.
+--
+-- Food is drawn slightly farther inward to reduce overlap with opponent
+-- indicators.
 foodIndicatorInset :: Float
 foodIndicatorInset = 36
 
+
 -- -----------------------------------------------------------------------------
--- Viewport
+-- Viewport definition
 -- -----------------------------------------------------------------------------
 
 -- | Rectangular part of a game map currently visible on screen.
 data Viewport = Viewport
     {
+        -- | Leftmost visible map coordinate.
         viewportMinX :: Int,
+
+        -- | Topmost visible map coordinate.
         viewportMinY :: Int,
+
+        -- | Number of visible horizontal cells.
         viewportWidth :: Int,
+
+        -- | Number of visible vertical cells.
         viewportHeight :: Int,
+
+        -- | Rendered size of one visible cell in pixels.
         viewportCellSize :: Float
     }
     deriving (Show, Eq)
 
 
--- | Returns True if the map is larger than the configured viewport.
+-- | Returns whether a map is larger than the configured camera area.
 usesViewport :: GameMap -> Bool
 usesViewport gameMap' =
     mapWidth gameMap' > viewportWidthCells
         || mapHeight gameMap' > viewportHeightCells
 
 
--- | Restricts an integer value to the given inclusive interval.
+-- | Restricts a value to an inclusive integer interval.
 clampInt :: Int -> Int -> Int -> Int
 clampInt minimumValue maximumValue value =
     max minimumValue (min maximumValue value)
 
 
--- | Computes a cell size that keeps the configured viewport inside the board
--- drawing area.
+-- | Computes a cell size that keeps the visible map inside the drawing area.
 cellSizeForViewport :: Int -> Int -> Float
 cellSizeForViewport width height =
-    min
-        viewportMaxCellSize
-        ( min
+    min viewportMaxCellSize $
+        min
             (viewportMaxPixelWidth / fromIntegral width)
             (viewportMaxPixelHeight / fromIntegral height)
-        )
 
 
--- | Creates a viewport centered as closely as possible around the given map
--- position while remaining fully inside the map.
+-- | Creates a viewport centered as closely as possible on a map position.
+--
+-- Near map boundaries the viewport itself is clamped instead of displaying
+-- coordinates outside the map, so the focused position will no longer remain
+-- exactly in the center.
 viewportAround :: GameMap -> Position -> Viewport
 viewportAround gameMap' (focusX, focusY) =
     Viewport
-        {
-            viewportMinX = minimumX,
-            viewportMinY = minimumY,
-            viewportWidth = visibleWidth,
-            viewportHeight = visibleHeight,
-            viewportCellSize =
-                cellSizeForViewport
-                    visibleWidth
-                    visibleHeight
+        { viewportMinX = minimumX
+        , viewportMinY = minimumY
+        , viewportWidth = visibleWidth
+        , viewportHeight = visibleHeight
+        , viewportCellSize = cellSizeForViewport visibleWidth visibleHeight
         }
   where
-    visibleWidth =
-        min viewportWidthCells (mapWidth gameMap')
+    visibleWidth = min viewportWidthCells (mapWidth gameMap')
+    visibleHeight = min viewportHeightCells (mapHeight gameMap')
 
-    visibleHeight =
-        min viewportHeightCells (mapHeight gameMap')
+    maximumX = max 0 (mapWidth gameMap' - visibleWidth)
+    maximumY = max 0 (mapHeight gameMap' - visibleHeight)
 
-    maximumX =
-        max 0 (mapWidth gameMap' - visibleWidth)
-
-    maximumY =
-        max 0 (mapHeight gameMap' - visibleHeight)
-
-    minimumX =
-        clampInt
-            0
-            maximumX
-            (focusX - visibleWidth `div` 2)
-
-    minimumY =
-        clampInt
-            0
-            maximumY
-            (focusY - visibleHeight `div` 2)
+    minimumX = clampInt 0 maximumX (focusX - visibleWidth `div` 2)
+    minimumY = clampInt 0 maximumY (focusY - visibleHeight `div` 2)
 
 
--- | Returns True if a map position lies inside the visible viewport.
+-- -----------------------------------------------------------------------------
+-- Visible positions and coordinate conversion
+-- -----------------------------------------------------------------------------
+
+-- | Returns whether a map position lies inside a viewport.
 positionInViewport :: Viewport -> Position -> Bool
 positionInViewport viewport (x, y) =
     x >= viewportMinX viewport
@@ -137,56 +143,41 @@ positionInViewport viewport (x, y) =
         && y < viewportMinY viewport + viewportHeight viewport
 
 
--- | Returns all map positions currently visible in the viewport.
+-- | Returns every map position currently visible inside a viewport.
 viewportPositions :: Viewport -> [Position]
 viewportPositions viewport =
-    [
-        (x, y)
-        | y <- [viewportMinY viewport .. viewportMinY viewport + viewportHeight viewport - 1],
-          x <- [viewportMinX viewport .. viewportMinX viewport + viewportWidth viewport - 1]
+    [ (x, y)
+    | y <- [viewportMinY viewport .. viewportMinY viewport + viewportHeight viewport - 1]
+    , x <- [viewportMinX viewport .. viewportMinX viewport + viewportWidth viewport - 1]
     ]
 
 
--- | Converts an absolute map position into Gloss coordinates relative to the
--- visible viewport.
+-- | Converts an absolute map position into viewport-relative Gloss coordinates.
+--
+-- Map Y coordinates increase downwards, while Gloss Y coordinates increase
+-- upwards, so the vertical axis is inverted during conversion.
 viewportPositionToScreen :: Viewport -> Position -> (Float, Float)
 viewportPositionToScreen viewport (x, y) =
     (screenX, screenY)
   where
-    cellSize =
-        viewportCellSize viewport
+    cellSize = viewportCellSize viewport
+    localX = x - viewportMinX viewport
+    localY = y - viewportMinY viewport
 
-    localX =
-        x - viewportMinX viewport
+    pixelWidth = fromIntegral (viewportWidth viewport) * cellSize
+    pixelHeight = fromIntegral (viewportHeight viewport) * cellSize
 
-    localY =
-        y - viewportMinY viewport
-
-    pixelWidth =
-        fromIntegral (viewportWidth viewport) * cellSize
-
-    pixelHeight =
-        fromIntegral (viewportHeight viewport) * cellSize
-
-    screenX =
-        fromIntegral localX * cellSize
-            - pixelWidth / 2
-            + cellSize / 2
-
-    screenY =
-        pixelHeight / 2
-            - fromIntegral localY * cellSize
-            - cellSize / 2
+    screenX = fromIntegral localX * cellSize - pixelWidth / 2 + cellSize / 2
+    screenY = pixelHeight / 2 - fromIntegral localY * cellSize - cellSize / 2
 
 
 -- -----------------------------------------------------------------------------
 -- Off-screen indicators
 -- -----------------------------------------------------------------------------
 
--- | Returns the squared geometric distance between two map positions.
+-- | Returns squared Euclidean distance between two map positions.
 --
--- Squared distance is sufficient for comparing positions and avoids an
--- unnecessary square-root calculation.
+-- Squared distance is sufficient when only relative distances are compared.
 squaredDistance :: Position -> Position -> Int
 squaredDistance (x1, y1) (x2, y2) =
     dx * dx + dy * dy
@@ -195,81 +186,54 @@ squaredDistance (x1, y1) (x2, y2) =
     dy = y2 - y1
 
 
--- | Returns the position nearest to the given origin.
+-- | Returns the geometrically nearest position to an origin.
 nearestPosition :: Position -> [Position] -> Maybe Position
 nearestPosition _ [] =
     Nothing
 
 nearestPosition origin (firstPosition : remainingPositions) =
-    Just
-        (foldl chooseCloser firstPosition remainingPositions)
+    Just (foldl chooseCloser firstPosition remainingPositions)
   where
     chooseCloser currentBest candidate
-        | squaredDistance origin candidate < squaredDistance origin currentBest =
-            candidate
-
-        | otherwise =
-            currentBest
+        | squaredDistance origin candidate < squaredDistance origin currentBest = candidate
+        | otherwise = currentBest
 
 
--- | Computes the screen position and rotation angle of an indicator pointing
--- from the focused map position towards an off-screen target.
+-- | Computes edge placement and angle for an indicator pointing at an
+-- off-screen target.
 --
--- Nothing is returned when the target is already visible.
+-- The returned tuple contains @(screenX, screenY, angleDegrees)@. 'Nothing' is
+-- returned when the target is already visible.
 offscreenIndicatorPlacement :: Float -> Viewport -> Position -> Position -> Maybe (Float, Float, Float)
 offscreenIndicatorPlacement inset viewport focusPosition targetPosition
-    | positionInViewport viewport targetPosition =
-        Nothing
-
-    | deltaX == 0 && deltaY == 0 =
-        Nothing
-
+    | positionInViewport viewport targetPosition = Nothing
+    | deltaX == 0 && deltaY == 0 = Nothing
     | otherwise =
         Just
-            (
-                fromIntegral deltaX * scaleFactor,
-                fromIntegral deltaY * scaleFactor,
-                angle
+            ( fromIntegral deltaX * scaleFactor
+            , fromIntegral deltaY * scaleFactor
+            , angleDegrees
             )
   where
-    (focusX, focusY) =
-        focusPosition
+    (focusX, focusY) = focusPosition
+    (targetX, targetY) = targetPosition
 
-    (targetX, targetY) =
-        targetPosition
+    deltaX = targetX - focusX
 
-    deltaX =
-        targetX - focusX
+    -- Map Y increases downwards, but Gloss Y increases upwards.
+    deltaY = focusY - targetY
 
-    -- Map Y increases downwards while Gloss Y increases upwards.
-    deltaY =
-        focusY - targetY
+    cellSize = viewportCellSize viewport
+    halfWidth = fromIntegral (viewportWidth viewport) * cellSize / 2 - inset
+    halfHeight = fromIntegral (viewportHeight viewport) * cellSize / 2 - inset
 
-    cellSize =
-        viewportCellSize viewport
-
-    halfWidth =
-        fromIntegral (viewportWidth viewport) * cellSize / 2 - inset
-
-    halfHeight =
-        fromIntegral (viewportHeight viewport) * cellSize / 2 - inset
-
-    horizontalScale
-        | deltaX == 0 = 1 / 0
+    scaleFactor
+        | deltaX == 0 = halfHeight / abs (fromIntegral deltaY)
+        | deltaY == 0 = halfWidth / abs (fromIntegral deltaX)
         | otherwise =
-            halfWidth / abs (fromIntegral deltaX)
+            min
+                (halfWidth / abs (fromIntegral deltaX))
+                (halfHeight / abs (fromIntegral deltaY))
 
-    verticalScale
-        | deltaY == 0 = 1 / 0
-        | otherwise =
-            halfHeight / abs (fromIntegral deltaY)
-
-    scaleFactor =
-        min horizontalScale verticalScale
-
-    angle =
-        atan2
-            (fromIntegral deltaY)
-            (fromIntegral deltaX)
-            * 180
-            / pi
+    angleDegrees =
+        atan2 (fromIntegral deltaY) (fromIntegral deltaX) * 180 / pi

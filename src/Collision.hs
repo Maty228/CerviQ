@@ -1,14 +1,28 @@
+{-|
+Module      : Collision
+Description : Collision detection and simultaneous worm-movement resolution.
+
+This module determines whether worm positions are blocked by the map or collide
+with worm bodies. For a complete game turn, all worms are first moved according
+to their actions and collisions are then evaluated on the resulting shared
+state. This ensures that worm movement is resolved simultaneously.
+-}
+
 module Collision where
 
-import Types
 import Maps
 import Movement
+import Types
 
 import Data.List (find)
 import Data.Maybe (mapMaybe)
 
 
--- | Describes why a worm died during a turn.
+-- -----------------------------------------------------------------------------
+-- Death reasons
+-- -----------------------------------------------------------------------------
+
+-- | Reason why a worm died during one game tick.
 data DeathReason
     = HitWall
     | HitPoison
@@ -22,86 +36,50 @@ data DeathReason
 -- Map collisions
 -- -----------------------------------------------------------------------------
 
--- | Returns True if the given position is blocked by a wall or lies outside the map.
+-- | Returns whether a position is a wall or lies outside the map.
+--
+-- Positions outside the map are treated as blocked so movement code does not
+-- need a separate boundary check.
 isBlocked :: GameMap -> Position -> Bool
 isBlocked currentMap pos =
     case tileAt currentMap pos of
         Nothing -> True
-        Just tile -> tile == Wall 
+        Just tile -> tile == Wall
 
 
--- | Returns True if the worm would hit a wall by moving forward.
+-- | Returns whether a worm would hit a blocked map position by moving forward.
 wouldHitWall :: GameMap -> Worm -> Bool
 wouldHitWall currentMap worm =
     isBlocked currentMap (nextHeadPosition worm)
 
 
--- | Returns True if the worm would hit a wall after performing the given action.
+-- | Returns whether a worm would hit a blocked map position after an action.
 wouldHitWallAfterAction :: GameMap -> Action -> Worm -> Bool
 wouldHitWallAfterAction currentMap action worm =
-    let newDirection = applyAction (wormDirection worm) action
-        turnedWorm = worm {wormDirection = newDirection}
-    in wouldHitWall currentMap turnedWorm
+    isBlocked currentMap (headAfterAction worm action)
 
 
 -- -----------------------------------------------------------------------------
--- Worm collisions
+-- Occupied positions
 -- -----------------------------------------------------------------------------
 
--- | Returns all positions currently occupied by the given worms.
+-- | Returns all positions occupied by the given worms.
 occupiedPositions :: [Worm] -> [Position]
 occupiedPositions worms =
     concatMap wormBody worms
 
 
--- | Simulates the next state of all worms after executing their actions.
-futureWorms :: [(Bool, Action, Worm)] -> [Worm]
-futureWorms moves =
-    map (\(grows, action, worm) -> moveWormAfterAction grows action worm) moves
-
-
--- | Returns all positions occupied after the simulated movement.
-futureOccupiedPositions :: [(Bool, Action, Worm)] -> [Position]
-futureOccupiedPositions moves =
-    occupiedPositions (futureWorms moves)
-
-
--- | Counts how many times the given position occurs in the list.
-countPosition :: Position -> [Position] -> Int
-countPosition pos positions =
-    length (filter (== pos) positions)
-
-
--- | Returns True if the worm's head collides with another occupied position.
-headCollision :: [Position] -> Worm -> Bool
-headCollision positions worm =
-    countPosition (wormHead worm) positions > 1
-
-
--- | Returns True if the given position is occupied.
+-- | Returns whether a position is occupied by any worm segment.
 positionOccupied :: Position -> [Position] -> Bool
 positionOccupied pos positions =
     pos `elem` positions
 
 
--- | Checks whether the worm collides with another worm.
-wormCollidesWithBodies :: [Worm] -> Worm -> Bool
-wormCollidesWithBodies worms worm =
-    headCollision (occupiedPositions worms) worm
+-- | Counts how many times a position occurs in a collection of positions.
+countPosition :: Position -> [Position] -> Int
+countPosition pos positions =
+    length (filter (== pos) positions)
 
-
--- | Checks whether the worm collides with the map.
-wormCollidesWithMap :: GameMap -> Worm -> Bool
-wormCollidesWithMap currentMap worm =
-    isBlocked currentMap (wormHead worm)
-
-
--- | Checks whether the worm collides with the map or another worm.
-wormCollides :: GameMap -> [Worm] -> Worm -> Bool
-wormCollides currentMap worms worm =
-    case deathReason currentMap worms worm of
-        Just _ -> True
-        Nothing -> False
 
 -- | Returns the worm body without its head.
 bodyWithoutHead :: Worm -> [Position]
@@ -112,16 +90,42 @@ bodyWithoutHead worm =
 
 
 -- -----------------------------------------------------------------------------
--- Turn simulation
+-- Collision helpers
 -- -----------------------------------------------------------------------------
 
--- | Returns the first worm whose body contains the given position.
+-- | Returns whether a worm's head shares a position with another worm segment.
+headCollision :: [Position] -> Worm -> Bool
+headCollision positions worm =
+    countPosition (wormHead worm) positions > 1
+
+
+-- | Returns whether a worm collides with any worm body.
+wormCollidesWithBodies :: [Worm] -> Worm -> Bool
+wormCollidesWithBodies worms worm =
+    headCollision (occupiedPositions worms) worm
+
+
+-- | Returns whether a worm collides with a blocked map position.
+wormCollidesWithMap :: GameMap -> Worm -> Bool
+wormCollidesWithMap currentMap worm =
+    isBlocked currentMap (wormHead worm)
+
+
+-- | Returns whether a worm has any fatal collision in the current state.
+wormCollides :: GameMap -> [Worm] -> Worm -> Bool
+wormCollides currentMap worms worm =
+    case deathReason currentMap worms worm of
+        Just _ -> True
+        Nothing -> False
+
+
+-- | Returns the first worm whose body, excluding its head, contains a position.
 bodyOwnerAt :: Position -> [Worm] -> Maybe Worm
 bodyOwnerAt pos worms =
     find (\worm -> pos `elem` bodyWithoutHead worm) worms
 
 
--- | Returns IDs of other worms whose heads are on the same position.
+-- | Returns IDs of other worms whose heads occupy the same position.
 headToHeadIds :: [Worm] -> Worm -> [Int]
 headToHeadIds worms worm =
     [ wormId other
@@ -131,46 +135,58 @@ headToHeadIds worms worm =
     ]
 
 
--- | Determines whether the given moved worm died and why.
+-- -----------------------------------------------------------------------------
+-- Death resolution
+-- -----------------------------------------------------------------------------
+
+-- | Determines whether a moved worm died and returns the corresponding reason.
+--
+-- Collision types are checked in a fixed order: blocked map positions, poison,
+-- the worm's own body, another head, and finally another worm's body.
 deathReason :: GameMap -> [Worm] -> Worm -> Maybe (Worm, DeathReason)
 deathReason currentMap worms worm
-    | isBlocked currentMap headPos =
-        Just (worm, HitWall)
-
-    | isPoison currentMap headPos =
-        Just (worm, HitPoison)
-
-    | headPos `elem` bodyWithoutHead worm =
-        Just (worm, HitOwnBody)
-
-    | not (null headHits) =
-        Just (worm, HeadToHead (wormId worm : headHits))
-
+    | isBlocked currentMap headPos = Just (worm, HitWall)
+    | isPoison currentMap headPos = Just (worm, HitPoison)
+    | headPos `elem` bodyWithoutHead worm = Just (worm, HitOwnBody)
+    | not (null headHits) = Just (worm, HeadToHead (wormId worm : headHits))
     | otherwise =
         case bodyOwnerAt headPos otherWorms of
-            Just killer ->
-                Just (worm, HitOtherBody (wormId killer))
-
-            Nothing ->
-                Nothing
+            Just killer -> Just (worm, HitOtherBody (wormId killer))
+            Nothing -> Nothing
   where
     headPos = wormHead worm
-
-    otherWorms =
-        filter (\other -> wormId other /= wormId worm) worms
-
-    headHits =
-        headToHeadIds worms worm
+    otherWorms = filter (\other -> wormId other /= wormId worm) worms
+    headHits = headToHeadIds worms worm
 
 
--- | Simulates one game turn and separates surviving worms from deaths.
+-- -----------------------------------------------------------------------------
+-- Simultaneous turn simulation
+-- -----------------------------------------------------------------------------
+
+-- | Moves all worms according to their prepared actions.
+--
+-- The Boolean value specifies whether the corresponding worm grows this tick.
+futureWorms :: [(Bool, Action, Worm)] -> [Worm]
+futureWorms moves =
+    map (\(grows, action, worm) -> moveWormAfterAction grows action worm) moves
+
+
+-- | Returns all positions occupied after the prepared movements are applied.
+futureOccupiedPositions :: [(Bool, Action, Worm)] -> [Position]
+futureOccupiedPositions moves =
+    occupiedPositions (futureWorms moves)
+
+
+-- | Simulates simultaneous worm movement and separates survivors from deaths.
+--
+-- Every worm is moved before any collision is resolved. Therefore all
+-- collision checks observe the same resulting state rather than depending on
+-- the order in which worms appear in the list.
 simulateTurn :: GameMap -> [(Bool, Action, Worm)] -> ([Worm], [(Worm, DeathReason)])
 simulateTurn currentMap moves =
-    let movedWorms = futureWorms moves
-        deaths = mapMaybe (deathReason currentMap movedWorms) movedWorms
-        deadIds = map (wormId . fst) deaths
-        survivingWorms =
-            filter
-                (\worm -> wormId worm `notElem` deadIds)
-                movedWorms
-    in (survivingWorms, deaths)
+    (survivingWorms, deaths)
+  where
+    movedWorms = futureWorms moves
+    deaths = mapMaybe (deathReason currentMap movedWorms) movedWorms
+    deadIds = map (wormId . fst) deaths
+    survivingWorms = filter (\worm -> wormId worm `notElem` deadIds) movedWorms
