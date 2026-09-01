@@ -1,11 +1,16 @@
 {-|
 Module      : Gui
-Description : Watch Agents simulation, graphical board rendering, and debug HUD.
+Description : Multi-worm Watch Agents simulation, rendering, and debug HUD.
 
 This module implements the interactive Watch Agents mode. It maintains a
-history of simulation snapshots, obtains actions from configured controllers,
-supports pausing and stepping through the simulation, and displays both general
-game information and version-independent Q-learning diagnostics.
+history of simulation snapshots, obtains actions from every configured
+controller, supports pausing and stepping through the simulation, and displays
+both general game information and version-independent Q-learning diagnostics.
+
+Watch mode is designed for a dynamic multi-worm roster. The running interface
+renders all configured worms, allows Worms 1–9 to be selected directly from the
+keyboard, follows the selected worm on large maps, and adapts its agent roster
+layout to the number of active agents.
 
 The module also contains graphical helpers shared with the application menus
 and 'PlayGui', including board rendering, viewport indicators, panels, text,
@@ -17,7 +22,7 @@ import Maps ( tileAt, allMapPositions, foodPositions )
 import Types
 import Config ( maxFoodCount )
 import Controller ( collectActions )
-import Game ( maintainFoodCount, stepGame )
+import Game ( maintainFoodCountAwayFromWorms, stepGame )
 import Viewport
 
 import qualified QLearning.Core as Core
@@ -107,6 +112,7 @@ data GuiWorld = GuiWorld
         guiFuture :: [GuiSnapshot],
         guiInitialState :: GameState,
         guiAgents :: [GuiAgent],
+        guiFoodTarget :: Int,
         guiSelectedWormId :: Int,
         guiHudMode :: WatchHudMode,
         guiPaused :: Bool,
@@ -131,30 +137,38 @@ data GuiAgent = GuiAgent
         guiAgentDebugProvider :: Maybe Debug.AgentDebugProvider
     }
 
--- | Creates the initial GUI debugger state.
+-- | Creates an initial Watch world using the legacy/default fixed food target.
+--
+-- Interactive application setup normally uses
+-- 'initialGuiWorldWithFoodTarget' with a scenario-specific value.
 initialGuiWorld :: [GuiAgent] -> GameState -> GuiWorld
-initialGuiWorld agents initialState =
-    GuiWorld 
-        {
-            guiCurrent =
-                GuiSnapshot 
-                    {
-                        snapshotGameState = initialState,
-                        snapshotActions = [],
-                        snapshotRewards = []
-                    },
-            guiHistory = [],
-            guiFuture = [],
-            guiInitialState = initialState,
-            guiAgents = agents,
-            guiSelectedWormId =
-                case agents of
-                    agent : _ -> guiAgentWormId agent
-                    [] -> 1,
-            guiHudMode = WatchOverviewMode,
-            guiPaused = True,
-            guiSpeed = 3,
-            guiAccumulator = 0       
+initialGuiWorld =
+    initialGuiWorldWithFoodTarget maxFoodCount
+
+
+-- | Creates an initial Watch world with the requested maintained food target.
+initialGuiWorldWithFoodTarget :: Int -> [GuiAgent] -> GameState -> GuiWorld
+initialGuiWorldWithFoodTarget foodTarget agents initialState =
+    GuiWorld
+        { guiCurrent =
+            GuiSnapshot
+                { snapshotGameState = initialState
+                , snapshotActions = []
+                , snapshotRewards = []
+                }
+        , guiHistory = []
+        , guiFuture = []
+        , guiInitialState = initialState
+        , guiAgents = agents
+        , guiFoodTarget = foodTarget
+        , guiSelectedWormId =
+            case agents of
+                agent : _ -> guiAgentWormId agent
+                [] -> 1
+        , guiHudMode = WatchOverviewMode
+        , guiPaused = True
+        , guiSpeed = 3
+        , guiAccumulator = 0
         }
 
 -- -----------------------------------------------------------------------------
@@ -197,7 +211,7 @@ computeNextSnapshot world
     | otherwise = do
         actions <- collectActions (guiControllers (guiAgents world)) currentState
         let steppedState = stepGame actions currentState
-        nextState <- maintainFoodCount maxFoodCount steppedState
+        nextState <- maintainFoodCountAwayFromWorms (guiFoodTarget world) steppedState
         let rewards =
                 [
                     (guiAgentWormId agent, reward) | agent <- guiAgents world,
@@ -912,41 +926,93 @@ drawFooter left y hints =
 -- Watch HUD
 -- -----------------------------------------------------------------------------
 
+-- | Left edge of the content area inside the Watch HUD.
+watchHudLeft :: Float
+watchHudLeft = 215
+
+
+-- | Width available to ordinary full-width Watch HUD rows.
+watchHudContentWidth :: Float
+watchHudContentWidth = 440
+
+
+-- | Vertical position of the first agent row in the Watch overview.
+watchRosterStartY :: Float
+watchRosterStartY = 160
+
+
+-- | Vertical spacing between rows of the Watch agent roster.
+watchRosterRowSpacing :: Float
+watchRosterRowSpacing = 32
+
+
+-- | Number of columns used by the Watch agent roster.
+--
+-- Up to four agents use one wide column so controller names remain easy to
+-- read. Larger rosters use two columns so up to nine configured worms fit
+-- without reducing the text to an unreadable size.
+watchRosterColumnCount :: Int -> Int
+watchRosterColumnCount agentCount
+    | agentCount <= 4 = 1
+    | otherwise = 2
+
+
+-- | Number of visual rows required by an agent roster of the given size.
+watchRosterRowCount :: Int -> Int
+watchRosterRowCount agentCount
+    | agentCount <= 0 = 0
+    | otherwise =
+        (agentCount + columnCount - 1) `div` columnCount
+  where
+    columnCount =
+        watchRosterColumnCount agentCount
+
+
+-- | Vertical position of the selected-worm section for the current roster.
+--
+-- This keeps the details below the agent rows instead of assuming that exactly
+-- two worms are present.
+watchSelectedOverviewHeaderY :: GuiWorld -> Float
+watchSelectedOverviewHeaderY world =
+    watchRosterStartY
+        - fromIntegral (watchRosterRowCount agentCount) * watchRosterRowSpacing
+        - 8
+  where
+    agentCount =
+        length (guiAgents world)
+
 
 -- | Draws the complete right-side Watch Agents HUD.
 drawWatchHud :: GuiWorld -> Picture
 drawWatchHud world =
     pictures
-        [
-            drawPanel 185 360 515 700,
-            drawWatchHeader world,
-            drawWatchModeTabs world,
-            case guiHudMode world of
-                WatchOverviewMode -> drawWatchOverview world
-                WatchDebugMode -> drawWatchDebug world,
-            drawFooter
-                215
-                (-320)
-                [
-                    "D view",
-                    "SPACE pause",
-                    "<-/-> step",
-                    "R restart",
-                    "+/- speed",
-                    "ESC back"
-                ]
+        [ drawPanel 185 360 515 700
+        , drawWatchHeader world
+        , drawWatchModeTabs world
+        , case guiHudMode world of
+            WatchOverviewMode -> drawWatchOverview world
+            WatchDebugMode -> drawWatchDebug world
+        , drawFooter
+            watchHudLeft
+            (-320)
+            [ "D view"
+            , "SPACE pause"
+            , "<-/-> step"
+            , "R restart"
+            , "+/- speed"
+            , "ESC back"
+            ]
         ]
 
 
--- | Draws the Watch title, status badge and simulation counters.
+-- | Draws the Watch title, status badge, and simulation counters.
 drawWatchHeader :: GuiWorld -> Picture
 drawWatchHeader world =
     pictures
-        [
-            drawGuiText 215 318 0.18 white "Watch Agents",
-            drawStatusBadge 560 332 statusText statusColor,
-            drawStatLine 215 278 "Tick" (show (gameTick currentState)),
-            drawStatLine 415 278 "Speed" (printf "%.2fx" (guiSpeed world))
+        [ drawGuiText watchHudLeft 318 0.18 white "Watch Agents"
+        , drawStatusBadge 560 332 statusText statusColor
+        , drawStatLine watchHudLeft 278 "Tick" (show (gameTick currentState))
+        , drawStatLine 415 278 "Speed" (printf "%.2fx" (guiSpeed world))
         ]
   where
     currentState =
@@ -967,100 +1033,219 @@ drawWatchHeader world =
 drawWatchModeTabs :: GuiWorld -> Picture
 drawWatchModeTabs world =
     pictures
-        [
-            drawTab 215 "OVERVIEW" (guiHudMode world == WatchOverviewMode),
-            drawTab 335 "DEBUG" (guiHudMode world == WatchDebugMode)
+        [ drawTab watchHudLeft "OVERVIEW" (guiHudMode world == WatchOverviewMode)
+        , drawTab 335 "DEBUG" (guiHudMode world == WatchDebugMode)
         ]
   where
+    -- | Draws one Watch HUD mode tab.
+    drawTab :: Float -> String -> Bool -> Picture
     drawTab left label selected =
         pictures
-            [
-                drawBox left 250 106 30 tabFill,
-                translate (left + 53) 235 $
-                    color tabBorder $
-                        rectangleWire 106 30,
-                drawGuiText (left + 15) 229 0.08 tabText label
+            [ drawBox left 250 106 30 tabFill
+            , translate (left + 53) 235 $
+                color tabBorder $
+                    rectangleWire 106 30
+            , drawGuiText (left + 15) 229 0.08 tabText label
             ]
       where
         tabFill =
-            if selected then uiSelectedFill else makeColorI 24 28 34 255
+            if selected
+                then uiSelectedFill
+                else makeColorI 24 28 34 255
 
         tabBorder =
-            if selected then uiAccentColor else uiBorderColor
+            if selected
+                then uiAccentColor
+                else uiBorderColor
 
         tabText =
-            if selected then white else uiMutedColor
+            if selected
+                then white
+                else uiMutedColor
 
 
 -- | Draws the readable Watch overview page.
 drawWatchOverview :: GuiWorld -> Picture
 drawWatchOverview world =
     pictures
-        [
-            drawSectionHeader 215 190 white "Agents",
-            drawWatchAgentRows world 160,
-            drawSelectedWormOverview world
+        [ drawSectionHeader
+            watchHudLeft
+            190
+            white
+            ("Agents (" ++ show (length (guiAgents world)) ++ ")")
+        , drawWatchAgentRows world watchRosterStartY
+        , drawSelectedWormOverview world
         ]
 
 
--- | Draws compact agent rows for the Watch overview page.
+-- | Draws the adaptive agent roster shown in the Watch overview.
+--
+-- Small rosters use one wide column. Five or more agents use two columns,
+-- allowing all nine keyboard-selectable worms to remain visible.
 drawWatchAgentRows :: GuiWorld -> Float -> Picture
 drawWatchAgentRows world startY =
-    pictures (zipWith drawAgent [0 ..] (guiAgents world))
+    pictures (zipWith drawAgent [0 ..] agents)
   where
+    agents =
+        guiAgents world
 
+    agentCount =
+        length agents
+
+    columnCount =
+        watchRosterColumnCount agentCount
+
+    rowCount =
+        watchRosterRowCount agentCount
+
+    rowWidth =
+        if columnCount == 1
+            then watchHudContentWidth
+            else 210
+
+    columnSpacing =
+        230
+
+    maximumNameLength =
+        if columnCount == 1
+            then 34
+            else 17
+
+    -- | Draws one configured agent at its position in the adaptive roster grid.
+    drawAgent :: Int -> GuiAgent -> Picture
     drawAgent index agent =
-        let
-            y =
-                startY - fromIntegral index * 34
+        pictures
+            [ drawBox left (centerY + 14) rowWidth 28 rowColor
+            , translate (left + rowWidth / 2) centerY $
+                color borderColor $
+                    rectangleWire rowWidth 28
+            , translate (left + 16) (centerY + 1) $
+                color (guiAgentColor agent) $
+                    circleSolid 6
+            , drawGuiText
+                (left + 32)
+                (centerY - 8)
+                0.088
+                white
+                label
+            ]
+      where
+        columnIndex =
+            if columnCount == 1
+                then 0
+                else index `div` rowCount
 
-            selected =
-                guiSelectedWormId world == guiAgentWormId agent
+        rowIndex =
+            if columnCount == 1
+                then index
+                else index `mod` rowCount
 
-            rowColor =
-                if selected then uiSelectedFill else makeColorI 24 28 34 255
+        left =
+            watchHudLeft + fromIntegral columnIndex * columnSpacing
 
-            borderColor =
-                if selected then uiAccentColor else uiBorderColor
+        centerY =
+            startY - fromIntegral rowIndex * watchRosterRowSpacing
 
-            label =
-                "Worm "
-                    ++ show (guiAgentWormId agent)
-                    ++ "  "
-                    ++ shortenText 34 (guiAgentName agent)
-        in
-            pictures
-                [
-                    drawBox 215 (y + 14) 440 28 rowColor,
-                    translate 435 y $
-                        color borderColor $
-                            rectangleWire 440 28,
-                    translate 232 (y + 1) $
-                        color (guiAgentColor agent) $
-                            circleSolid 6,
-                    drawGuiText 250 (y - 8) 0.085 white label
-                ]
+        selected =
+            guiSelectedWormId world == guiAgentWormId agent
+
+        rowColor =
+            if selected
+                then uiSelectedFill
+                else makeColorI 24 28 34 255
+
+        borderColor =
+            if selected
+                then uiAccentColor
+                else uiBorderColor
+
+        wormLabel =
+            if columnCount == 1
+                then "Worm " ++ show (guiAgentWormId agent)
+                else "W" ++ show (guiAgentWormId agent)
+
+        label =
+            wormLabel
+                ++ "  "
+                ++ shortenText maximumNameLength (guiAgentName agent)
 
 
--- | Draws the selected worm's most important gameplay information.
+-- | Draws the selected worm's gameplay information below the adaptive roster.
+--
+-- The details use two compact columns so the complete section still fits when
+-- a nine-agent roster occupies five visual rows above it.
 drawSelectedWormOverview :: GuiWorld -> Picture
 drawSelectedWormOverview world =
     case Core.controlledWorm selectedId currentState of
         Nothing ->
-            drawGuiText 215 38 0.10 red "Selected worm not found"
+            pictures
+                [ drawSectionHeader watchHudLeft headerY red ("Selected Worm " ++ show selectedId)
+                , drawGuiText watchHudLeft (headerY - 32) 0.09 red "Selected worm not found."
+                ]
 
         Just worm ->
             pictures
-                [
-                    drawSectionHeader 215 58 white ("Selected Worm " ++ show selectedId),
-                    drawStatLine 215 26 "Status" (if wormAlive worm then "Alive" else "Dead"),
-                    drawStatLine 215 2 "Length" (show (length (wormBody worm))),
-                    drawStatLine 215 (-22) "Food" (show (foodEaten stats)),
-                    drawStatLine 215 (-46) "Kills" (show (kills stats)),
-                    drawStatLine 215 (-70) "Age" (show (age stats)),
-                    drawStatLine 215 (-105) "Last action" (maybe "-" show (snapshotActionFor selectedId snapshot)),
-                    drawStatLine 215 (-129) "Last reward" (maybe "-" (printf "%.2f") (snapshotRewardFor selectedId snapshot)),
-                    drawGuiText 215 (-172) 0.085 uiMutedColor "Press 1-9 to focus a worm. D opens RL details."
+                [ drawSectionHeader
+                    watchHudLeft
+                    headerY
+                    white
+                    ("Selected Worm " ++ show selectedId)
+
+                , drawGuiText
+                    watchHudLeft
+                    (headerY - 28)
+                    0.086
+                    uiMutedColor
+                    ("Agent: " ++ shortenText 48 selectedAgentName)
+
+                , drawStatLine
+                    watchHudLeft
+                    (headerY - 58)
+                    "Status"
+                    (if wormAlive worm then "Alive" else "Dead")
+
+                , drawStatLine
+                    430
+                    (headerY - 58)
+                    "Length"
+                    (show (length (wormBody worm)))
+
+                , drawStatLine
+                    watchHudLeft
+                    (headerY - 82)
+                    "Food"
+                    (show (foodEaten stats))
+
+                , drawStatLine
+                    430
+                    (headerY - 82)
+                    "Kills"
+                    (show (kills stats))
+
+                , drawStatLine
+                    watchHudLeft
+                    (headerY - 106)
+                    "Age"
+                    (show (age stats))
+
+                , drawStatLine
+                    430
+                    (headerY - 106)
+                    "Reward"
+                    (maybe "-" (printf "%.2f") (snapshotRewardFor selectedId snapshot))
+
+                , drawStatLine
+                    watchHudLeft
+                    (headerY - 138)
+                    "Last action"
+                    (maybe "-" show (snapshotActionFor selectedId snapshot))
+
+                , drawGuiText
+                    watchHudLeft
+                    (headerY - 174)
+                    0.083
+                    uiMutedColor
+                    "Press 1-9 to focus a worm. D opens RL details."
                 ]
           where
             stats =
@@ -1075,26 +1260,44 @@ drawSelectedWormOverview world =
     currentState =
         snapshotGameState snapshot
 
+    headerY =
+        watchSelectedOverviewHeaderY world
 
--- | Draws the detailed Watch diagnostic page.
+    selectedAgentName =
+        case findGuiAgent selectedId (guiAgents world) of
+            Just agent -> guiAgentName agent
+            Nothing -> "No configured controller"
+
+
+-- | Draws the detailed Watch diagnostic page for the selected worm.
+--
+-- The roster is intentionally hidden in this mode so version-specific
+-- Q-learning diagnostics receive the complete panel area regardless of how many
+-- worms participate in the game.
 drawWatchDebug :: GuiWorld -> Picture
 drawWatchDebug world =
     pictures
-        [
-            drawSectionHeader 215 198 white ("Worm " ++ show (guiSelectedWormId world) ++ " - RL Debug"),
-            drawGuiText 215 170 0.085 uiMutedColor "Overview is hidden here so the Q-learning state has room.",
-            drawAgentDebug world
+        [ drawSectionHeader
+            watchHudLeft
+            198
+            white
+            ("Worm " ++ show (guiSelectedWormId world) ++ " - RL Debug")
+        , drawGuiText
+            watchHudLeft
+            170
+            0.085
+            uiMutedColor
+            "Overview is hidden here so the Q-learning state has room."
+        , drawAgentDebug world
         ]
-
 
 
 -- | Draws version-independent debug information for the selected agent.
 drawAgentDebug :: GuiWorld -> Picture
 drawAgentDebug world =
     case
-        (
-            findGuiAgent selectedId (guiAgents world),
-            Core.controlledWorm selectedId currentState
+        ( findGuiAgent selectedId (guiAgents world)
+        , Core.controlledWorm selectedId currentState
         )
     of
         (Just agent, Just worm) ->
@@ -1117,8 +1320,7 @@ drawAgentDebug world =
                             "Worm is dead."
 
                     | otherwise ->
-                        drawDebugInfo
-                            (debugProvider currentState worm)
+                        drawDebugInfo (debugProvider currentState worm)
 
         _ ->
             Blank
@@ -1130,27 +1332,27 @@ drawAgentDebug world =
         snapshotGameState (guiCurrent world)
 
 
--- | Draws generic state information and Q-values.
+-- | Draws generic state information and Q-values from one debug provider.
 drawDebugInfo :: Debug.AgentDebugInfo -> Picture
 drawDebugInfo debugInfo =
     pictures
-        (
-            [ drawGuiText panelLeftX 132 0.12 white "RL state"]
+        ( [drawGuiText panelLeftX 132 0.12 white "RL state"]
             ++ statePictures
-            ++
-            [
-                drawGuiText panelLeftX qHeaderY 0.12 white "Q-values",
-                drawGuiText panelLeftX (qHeaderY - 26) 0.09 white ("Left:     " ++ printf "%.3f" (qValueOf TurnLeft)),
-                drawGuiText panelLeftX (qHeaderY - 48) 0.09 white ("Straight: " ++ printf "%.3f" (qValueOf GoStraight)),
-                drawGuiText panelLeftX (qHeaderY - 70) 0.09 white ("Right:    " ++ printf "%.3f" (qValueOf TurnRight)),
-                drawGuiText panelLeftX (qHeaderY - 96) 0.09 white ("Q best: " ++ shortenText 42 (show (Debug.debugBestActions debugInfo)))
-            ]
+            ++ [ drawGuiText panelLeftX qHeaderY 0.12 white "Q-values"
+               , drawGuiText panelLeftX (qHeaderY - 26) 0.09 white ("Left:     " ++ printf "%.3f" (qValueOf TurnLeft))
+               , drawGuiText panelLeftX (qHeaderY - 48) 0.09 white ("Straight: " ++ printf "%.3f" (qValueOf GoStraight))
+               , drawGuiText panelLeftX (qHeaderY - 70) 0.09 white ("Right:    " ++ printf "%.3f" (qValueOf TurnRight))
+               , drawGuiText panelLeftX (qHeaderY - 96) 0.09 white ("Q best: " ++ shortenText 42 (show (Debug.debugBestActions debugInfo)))
+               ]
         )
   where
-    stateLines = Debug.debugStateLines debugInfo
+    stateLines =
+        Debug.debugStateLines debugInfo
 
-    statePictures = zipWith drawStateLine [0 ..] stateLines
+    statePictures =
+        zipWith drawStateLine [0 ..] stateLines
 
+    -- | Draws one human-readable line of version-specific RL state information.
     drawStateLine :: Int -> (String, String) -> Picture
     drawStateLine index (label, value) =
         drawGuiText
@@ -1160,12 +1362,12 @@ drawDebugInfo debugInfo =
             white
             (shortenText 48 (label ++ ": " ++ value))
 
-    qHeaderY = 104 - fromIntegral (length stateLines) * 20 - 18
+    qHeaderY =
+        104 - fromIntegral (length stateLines) * 20 - 18
 
     qValueOf action =
         case lookup action (Debug.debugQValues debugInfo) of
             Just value -> value
-
             Nothing -> 0
 
 -- -----------------------------------------------------------------------------

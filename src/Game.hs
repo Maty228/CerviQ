@@ -4,10 +4,11 @@ Description : High-level game-state updates and one-tick CerviQ simulation.
 
 This module coordinates the individual parts of the game engine. It prepares
 worm actions, determines growth, delegates simultaneous movement and collision
-resolution to "Collision", updates worm statistics and food, records recent
-head positions, and advances the global game tick.
+resolution to "Collision", updates worm statistics and food, manages random
+food initialization and replenishment, records recent head positions, and
+advances the global game tick.
 
-The central functions are 'stepGameDetailed' and 'stepGame'.
+The central simulation functions are 'stepGameDetailed' and 'stepGame'.
 -}
 
 module Game where
@@ -91,6 +92,119 @@ randomFoodPosition state =
             index <- randomRIO (0, length freePositions - 1)
             pure (Just (freePositions !! index))
 
+
+-- | Minimum Manhattan distance between newly spawned interactive food and the
+-- head of every living worm.
+interactiveFoodHeadDistance :: Int
+interactiveFoodHeadDistance = 3
+
+
+-- | Returns the Manhattan distance between two map positions.
+manhattanDistance :: Position -> Position -> Int
+manhattanDistance (x1, y1) (x2, y2) =
+    abs (x1 - x2) + abs (y1 - y2)
+
+
+-- | Returns whether a position is sufficiently far from every living worm head.
+--
+-- This prevents interactive food from randomly appearing immediately beside a
+-- worm and giving it an accidental near-guaranteed reward.
+farEnoughFromLivingWorms :: GameState -> Position -> Bool
+farEnoughFromLivingWorms state pos =
+    all
+        (\headPos -> manhattanDistance pos headPos >= interactiveFoodHeadDistance)
+        livingHeads
+  where
+    livingHeads =
+        [ headPos
+        | worm <- gameWorms state
+        , wormAlive worm
+        , headPos : _ <- [wormBody worm]
+        ]
+
+
+-- | Returns a random valid food position that preferably avoids living worms.
+--
+-- If the preferred-distance restriction leaves no candidate, the function
+-- falls back to every otherwise valid free position. This keeps food spawning
+-- possible even in small or heavily occupied multi-worm games.
+randomFoodPositionAwayFromWorms :: GameState -> IO (Maybe Position)
+randomFoodPositionAwayFromWorms state =
+    chooseRandom candidatePositions
+  where
+    freePositions =
+        freeFoodPositions state
+
+    preferredPositions =
+        filter (farEnoughFromLivingWorms state) freePositions
+
+    candidatePositions =
+        if null preferredPositions
+            then freePositions
+            else preferredPositions
+
+    -- | Selects one random position from a non-empty candidate list.
+    chooseRandom :: [Position] -> IO (Maybe Position)
+    chooseRandom [] =
+        pure Nothing
+
+    chooseRandom positions = do
+        index <- randomRIO (0, length positions - 1)
+        pure (Just (positions !! index))
+
+
+-- | Maintains the requested number of food items while preferring new food
+-- positions that are not immediately beside a living worm.
+maintainFoodCountAwayFromWorms :: Int -> GameState -> IO GameState
+maintainFoodCountAwayFromWorms foodTarget state
+    | length (foodPositions (gameMap state)) >= foodTarget =
+        pure state
+
+    | otherwise = do
+        maybePosition <-
+            randomFoodPositionAwayFromWorms state
+
+        case maybePosition of
+            Nothing ->
+                pure state
+
+            Just position ->
+                maintainFoodCountAwayFromWorms
+                    foodTarget
+                    (spawnFoodAt position state)
+
+
+-- | Replaces all existing food with randomly positioned interactive food while
+-- avoiding cells immediately beside living worm heads whenever possible.
+randomizeFoodCountAwayFromWorms :: Int -> GameState -> IO GameState
+randomizeFoodCountAwayFromWorms foodTarget =
+    maintainFoodCountAwayFromWorms foodTarget . clearAllFood
+
+-- | Removes every food tile from the current game state.
+--
+-- Removed food is represented by absence from the sparse map, which is
+-- equivalent to an empty in-bounds tile.
+clearAllFood :: GameState -> GameState
+clearAllFood state =
+    state
+        { gameMap =
+            currentMap
+                { mapTiles = Map.filter (/= Food) (mapTiles currentMap)
+                }
+        }
+  where
+    currentMap =
+        gameMap state
+
+
+-- | Replaces all existing food with the requested number of randomly placed items.
+--
+-- The state is first cleared of every predefined food tile and then populated
+-- through 'maintainFoodCount'. The requested count is therefore reached exactly
+-- whenever the map contains enough valid free positions.
+randomizeFoodCount :: Int -> GameState -> IO GameState
+randomizeFoodCount foodTarget =
+    maintainFoodCount foodTarget . clearAllFood
 
 -- | Ensures that the map contains at least the requested number of food items.
 --

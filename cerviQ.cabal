@@ -2,18 +2,15 @@ cabal-version:       2.2
 
 name:                cerviQ
 version:             0.1.0.0
--- synopsis:
--- description:
-homepage:            https://github.com/githubuser/cerviQ#readme
+synopsis:            Multi-agent grid game with heuristic and Q-learning agents
 license:             BSD-3-Clause
 license-file:        LICENSE
-author:              Author name here
-maintainer:          example@example.com
-copyright:           2026 Author name here
-category:            Web
+author:              Matyáš Martinek
+copyright:           2026 Matyáš Martinek
+category:            Game
 build-type:          Simple
+
 extra-source-files:  README.md
-                     CHANGELOG.md
 
 
 common cerviq-common

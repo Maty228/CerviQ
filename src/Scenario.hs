@@ -2,10 +2,17 @@
 Module      : Scenario
 Description : Definition, construction, and validation of game scenarios.
 
-A scenario combines a game map with the worms that should initially inhabit it.
+A scenario combines a game map with default and optional worm starting
+positions together with scenario-specific interactive food settings.
 Controllers are deliberately not included, allowing the same environment to be
-used for human play, AI visualization, training, and evaluation. Before a
-scenario becomes a 'GameState', its initial configuration is validated.
+reused for human play, AI visualization, training, and evaluation.
+
+The default worms preserve the original scenario setup used by training and
+evaluation. Additional starts and adaptive food targets are used by interactive
+multi-worm sessions without changing those default experiment configurations.
+
+Before a scenario becomes a 'GameState', its selected worm configuration and
+static scenario settings are validated.
 -}
 
 module Scenario where
@@ -33,10 +40,54 @@ data Scenario = Scenario
         -- | Map used by the scenario.
         scenarioMap :: GameMap,
 
-        -- | Worms placed on the map at the beginning of the game.
-        scenarioWorms :: [Worm]
+        -- | Default worms placed on the map.
+        --
+        -- Existing Play, training, and evaluation code uses this list directly,
+        -- preserving the original two-worm scenarios.
+        scenarioWorms :: [Worm],
+
+        -- | Additional predefined worm starts available to multi-worm modes.
+        --
+        -- These worms are not included by 'scenarioInitialState'. Watch mode can
+        -- request them explicitly through 'scenarioInitialStateForWormCount'.
+        scenarioExtraWorms :: [Worm]
+
+                -- | Minimum food target used by interactive games on this scenario.
+        --
+        -- Training and evaluation may deliberately use their own fixed food
+        -- configuration instead.
+        , scenarioBaseFoodCount :: Int
+
+        -- | Upper bound on the interactive food target as more worms are added.
+        , scenarioMaximumFoodCount :: Int
     }
     deriving (Show, Eq)
+
+
+-- | Returns all predefined worm starts available in a scenario.
+scenarioAvailableWorms :: Scenario -> [Worm]
+scenarioAvailableWorms scenario =
+    scenarioWorms scenario ++ scenarioExtraWorms scenario
+
+
+-- | Returns the maximum number of predefined worms available in a scenario.
+scenarioMaximumWormCount :: Scenario -> Int
+scenarioMaximumWormCount =
+    length . scenarioAvailableWorms
+
+-- | Computes the maintained food target for an interactive game.
+--
+-- The scenario starts from its base food count and gains approximately one
+-- additional food item for every two extra configured worms, capped by the
+-- scenario-specific maximum.
+scenarioFoodCountForWorms :: Int -> Scenario -> Int
+scenarioFoodCountForWorms wormCount scenario =
+    min
+        (scenarioMaximumFoodCount scenario)
+        (scenarioBaseFoodCount scenario + additionalFood)
+  where
+    additionalFood =
+        max 0 (wormCount - 1) `div` 2
 
 
 -- -----------------------------------------------------------------------------
@@ -72,13 +123,13 @@ freshWorm targetId body direction =
 -- Scenario validation
 -- -----------------------------------------------------------------------------
 
--- | Returns all validation errors found in a scenario.
+-- | Returns validation errors for one map and selected worm configuration.
 --
--- A valid scenario contains at least one living worm, uses unique worm IDs,
--- has non-empty and non-overlapping bodies, and places every body segment on an
--- empty position inside the map.
-validateScenario :: Scenario -> [String]
-validateScenario scenario =
+-- A valid configuration contains at least one living worm, uses unique worm
+-- IDs, has non-empty and non-overlapping bodies, and places every body segment
+-- on an empty position inside the map.
+validateWormConfiguration :: GameMap -> [Worm] -> [String]
+validateWormConfiguration gameMap' worms =
     concat
         [ ["Scenario must contain at least one worm." | null worms]
         , ["All worms must start alive." | any (not . wormAlive) worms]
@@ -89,13 +140,14 @@ validateScenario scenario =
         , ["All worm body positions must start on empty tiles." | not (null blockedPositions)]
         ]
   where
-    gameMap' = scenarioMap scenario
-    worms = scenarioWorms scenario
     wormIds = map wormId worms
     bodyPositions = concatMap wormBody worms
 
     outsidePositions =
-        [ pos | pos <- bodyPositions, not (isInsideMap gameMap' pos) ]
+        [ pos
+        | pos <- bodyPositions
+        , not (isInsideMap gameMap' pos)
+        ]
 
     blockedPositions =
         [ pos
@@ -104,27 +156,90 @@ validateScenario scenario =
         , not (isEmptyTile gameMap' pos)
         ]
 
-
--- -----------------------------------------------------------------------------
--- Initial game state
--- -----------------------------------------------------------------------------
-
--- | Builds the initial game state represented by a scenario.
+-- | Returns all validation errors found in a complete scenario definition.
 --
--- Invalid manually defined scenarios fail immediately instead of allowing an
+-- Default and optional worm starts are validated together. Interactive food
+-- configuration must also use a non-negative base and a maximum no smaller
+-- than that base.
+validateScenario :: Scenario -> [String]
+validateScenario scenario =
+    foodConfigurationErrors
+        ++ validateWormConfiguration
+            (scenarioMap scenario)
+            (scenarioAvailableWorms scenario)
+  where
+    baseFood =
+        scenarioBaseFoodCount scenario
+
+    maximumFood =
+        scenarioMaximumFoodCount scenario
+
+    foodConfigurationErrors =
+        [ "Scenario base food count must not be negative."
+        | baseFood < 0
+        ]
+            ++ [ "Scenario maximum food count must be at least its base food count."
+               | maximumFood < baseFood
+               ]
+
+
+-- -----------------------------------------------------------------------------
+-- Initial game states
+-- -----------------------------------------------------------------------------
+
+-- | Builds a game state from a selected subset of one scenario's predefined worms.
+--
+-- Invalid predefined configurations fail immediately instead of allowing an
 -- inconsistent state to reach the game engine.
-scenarioInitialState :: Scenario -> GameState
-scenarioInitialState scenario =
-    case validateScenario scenario of
+initialStateWithWorms :: Scenario -> [Worm] -> GameState
+initialStateWithWorms scenario worms =
+    case validateWormConfiguration (scenarioMap scenario) worms of
         [] ->
             GameState
                 { gameMap = scenarioMap scenario
-                , gameWorms = scenarioWorms scenario
+                , gameWorms = worms
                 , gameTick = 0
-                , gameHeadHistory = initialHeadHistory (scenarioWorms scenario)
+                , gameHeadHistory = initialHeadHistory worms
                 }
+
         errors ->
             error
-                ( "Invalid scenario \"" ++ scenarioName scenario ++ "\":\n"
+                ( "Invalid scenario \""
+                    ++ scenarioName scenario
+                    ++ "\":\n"
                     ++ unlines (map ("  - " ++) errors)
                 )
+
+
+-- | Builds the default initial game state represented by a scenario.
+--
+-- Only 'scenarioWorms' are used here. This deliberately preserves the original
+-- two-worm behaviour used by Play mode, training, and evaluation.
+scenarioInitialState :: Scenario -> GameState
+scenarioInitialState scenario =
+    case validateScenario scenario of
+        [] -> initialStateWithWorms scenario (scenarioWorms scenario)
+
+        errors ->
+            error
+                ( "Invalid scenario \""
+                    ++ scenarioName scenario
+                    ++ "\":\n"
+                    ++ unlines (map ("  - " ++) errors)
+                )
+
+
+-- | Builds an initial state containing the requested number of predefined worms.
+--
+-- Worms are taken in scenario order: the default worms first, followed by the
+-- additional multi-worm starts. 'Nothing' is returned when the requested count
+-- is non-positive or exceeds the number of available predefined starts.
+scenarioInitialStateForWormCount :: Int -> Scenario -> Maybe GameState
+scenarioInitialStateForWormCount wormCount scenario
+    | wormCount <= 0 = Nothing
+    | wormCount > scenarioMaximumWormCount scenario = Nothing
+    | otherwise =
+        Just $
+            initialStateWithWorms
+                scenario
+                (take wormCount (scenarioAvailableWorms scenario))

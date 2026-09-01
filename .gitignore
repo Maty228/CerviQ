@@ -1,21 +1,14 @@
-
-
-# Stack build artifacts
+# Stack / Cabal build artifacts
 .stack-work/
-.stack-work
+dist/
+dist-newstyle/
+cabal-dev/
 
-# Cabal build artifacts
-/dist/
-/dist-newstyle/
-/cabal-dev/
-
-# Haskell Language Server
+# Haskell compiler and language-server files
 .hie/
 *.hie
 *.hi
 *.o
-
-# GHC environment files
 .ghc.environment.*
 
 # Profiling and debugging output
@@ -34,7 +27,7 @@
 .AppleDouble
 .LSOverride
 
-# VSCode
+# VS Code
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
@@ -43,8 +36,6 @@
 
 # Logs
 *.log
-.stack-work/stack.sqlite3
-.stack-work/
 
-# Statistics
+# Raw training statistics
 data/models/*_stats.txt

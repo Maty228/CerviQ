@@ -22,7 +22,6 @@ import Scenarios
 import Training
 import Types
 
-import qualified Data.Map as Map
 import System.Random (randomRIO)
 
 
@@ -106,23 +105,12 @@ selectWeighted target ((weight, value) : remaining)
 -- Initial state variation
 -- -----------------------------------------------------------------------------
 
--- | Removes all food tiles while preserving every other explicitly stored tile.
---
--- Empty cells are represented implicitly by the sparse 'GameMap', so removed
--- food entries are deleted rather than replaced by explicit 'Empty' values.
-clearFood :: GameMap -> GameMap
-clearFood gameMap' =
-    gameMap' {mapTiles = Map.filter (/= Food) (mapTiles gameMap')}
 
 
--- | Removes predefined food and randomly restores the configured food count.
---
--- Food placement uses the normal game spawning logic, so walls and worm bodies
--- remain unavailable for placement.
+-- | Removes predefined food and randomly fills the map to the fixed training target.
 randomizeInitialFood :: GameState -> IO GameState
-randomizeInitialFood state =
-    maintainFoodCount maxFoodCount state {gameMap = clearFood (gameMap state)}
-
+randomizeInitialFood =
+    randomizeFoodCount maxFoodCount
 
 -- | Swaps the starting body and direction of the first two worms while keeping
 -- their identifiers unchanged.

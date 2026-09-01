@@ -1,14 +1,21 @@
 {-|
 Module      : App
-Description : Top-level application state, menus, and mode transitions for CerviQ.
+Description : Top-level application state, dynamic setup menus, and mode transitions.
 
 This module coordinates the complete Gloss application. It stores menu
-configuration, constructs Watch Agents and Play vs Agent sessions, routes input
-to the currently active mode, renders menu screens, and updates the active game.
+configuration, constructs Watch Agents and Play vs Agents sessions, routes
+input to the currently active mode, renders menu screens, and updates active
+games.
+
+Both interactive setup screens support variable-size multi-worm rosters.
+Watch Agents configures between two and nine independently selectable AI
+controllers. Play vs Agents reserves Worm 1 for the human and configures one or
+more independently selectable AI opponents. In both cases the effective roster
+limit is additionally restricted by the predefined starting positions of the
+selected scenario.
 
 The actual Watch simulation is implemented in "Gui", while human-controlled
-gameplay is implemented in "PlayGui". This module is responsible for switching
-between those modes rather than implementing their game logic.
+gameplay is implemented in "PlayGui".
 -}
 
 module App where
@@ -16,14 +23,64 @@ module App where
 import AgentRegistry
 import Gui
 import PlayGui
+import Game (randomizeFoodCountAwayFromWorms)
 import Scenario
 import Scenarios
 import Types
 
-import Data.List (findIndex)
+import Data.List (elemIndex, findIndex)
 import Graphics.Gloss
 import Graphics.Gloss.Interface.IO.Game
 import System.Exit (exitSuccess)
+
+
+-- -----------------------------------------------------------------------------
+-- Application configuration
+-- -----------------------------------------------------------------------------
+
+-- | Minimum number of agents allowed in Watch Agents mode.
+minimumWatchAgentCount :: Int
+minimumWatchAgentCount = 2
+
+
+-- | Maximum number of agents supported by the Watch Agents interface.
+--
+-- The actual maximum for one game is also limited by the number of predefined
+-- worm starts available in the selected scenario.
+maximumWatchAgentCount :: Int
+maximumWatchAgentCount = 9
+
+-- | Minimum number of AI opponents required by Play vs Agents.
+minimumPlayOpponentCount :: Int
+minimumPlayOpponentCount = 1
+
+
+-- | Maximum number of AI opponents supported by Play vs Agents.
+--
+-- Worm 1 is reserved for the human, leaving at most eight AI-controlled worms
+-- within the application's nine-worm interface limit.
+maximumPlayOpponentCount :: Int
+maximumPlayOpponentCount =
+    maximumWatchAgentCount - 1
+
+
+-- | Stable display colors assigned to Watch agents by roster position.
+--
+-- The palette contains one color for every agent supported by the interface.
+-- Green is deliberately avoided as a primary color because food is rendered
+-- green on the game board.
+watchAgentColors :: [Color]
+watchAgentColors =
+    [ makeColorI 50 140 255 255
+    , makeColorI 255 130 60 255
+    , makeColorI 190 90 255 255
+    , makeColorI 245 205 65 255
+    , makeColorI 55 195 215 255
+    , makeColorI 255 95 170 255
+    , makeColorI 235 75 75 255
+    , makeColorI 100 170 210 255
+    , makeColorI 205 150 95 255
+    ]
 
 
 -- -----------------------------------------------------------------------------
@@ -38,36 +95,47 @@ data MenuScreen
     deriving (Show, Eq)
 
 
--- | Selected field of the Watch Agents setup screen.
+-- | Selected field of the dynamic Watch Agents setup screen.
+--
+-- 'WatchAgentField' stores the zero-based roster position of the selected worm.
 data WatchSetupField
     = WatchMapField
-    | WatchAgentOneField
-    | WatchAgentTwoField
+    | WatchAgentField Int
+    | WatchAddAgentField
+    | WatchRemoveAgentField
     | WatchStartField
     | WatchBackField
-    deriving (Show, Eq, Enum, Bounded)
+    deriving (Show, Eq)
 
 
--- | Selected field of the Play vs Agent setup screen.
+-- | Selected field of the dynamic Play vs Agents setup screen.
+--
+-- 'PlayOpponentField' stores the zero-based index within the AI-opponent roster.
 data PlaySetupField
     = PlayMapField
-    | PlayOpponentField
+    | PlayOpponentField Int
+    | PlayAddOpponentField
+    | PlayRemoveOpponentField
     | PlayStartField
     | PlayBackField
-    deriving (Show, Eq, Enum, Bounded)
+    deriving (Show, Eq)
 
 
 -- | Complete state of the application menus and their current selections.
 data MenuWorld = MenuWorld
-    {
-        menuScreen :: MenuScreen,
-        menuMainSelection :: Int,
-        menuScenarioIndex :: Int,
-        menuAgentOneIndex :: Int,
-        menuAgentTwoIndex :: Int,
-        menuWatchField :: WatchSetupField,
-        menuPlayOpponentIndex :: Int,
-        menuPlayField :: PlaySetupField
+    { menuScreen :: MenuScreen
+    , menuMainSelection :: Int
+    , menuScenarioIndex :: Int
+
+    -- | Selected AgentOption index for every active Watch worm.
+    --
+    -- The length of this list is the requested Watch roster size.
+    , menuWatchAgentIndices :: [Int]
+
+    , menuWatchField :: WatchSetupField
+    -- | Selected AgentOption index for every configured AI opponent.
+    , menuPlayOpponentIndices :: [Int]
+    , menuPlayField :: PlaySetupField
     }
 
 
@@ -97,20 +165,22 @@ agentIndexByName targetName options =
 initialMenuWorld :: [AgentOption] -> MenuWorld
 initialMenuWorld agentOptions =
     MenuWorld
-        {
-            menuScreen = MainMenuScreen,
-            menuMainSelection = 0,
-            menuScenarioIndex = 0,
-            menuAgentOneIndex = agentIndexByName "Q-learning V4 Reformed 30k + fallback" agentOptions,
-            menuAgentTwoIndex = agentIndexByName "Safe Greedy Food" agentOptions,
-            menuWatchField = WatchMapField,
-            menuPlayOpponentIndex = agentIndexByName "Q-learning V4 Reformed 30k + fallback" agentOptions,
-            menuPlayField = PlayMapField
+        { menuScreen = MainMenuScreen
+        , menuMainSelection = 0
+        , menuScenarioIndex = 0
+        , menuWatchAgentIndices =
+            [ agentIndexByName "Q-learning V4 Reformed 30k + fallback" agentOptions
+            , agentIndexByName "Safe Greedy Food" agentOptions
+            ]
+        , menuWatchField = WatchMapField
+        , menuPlayOpponentIndices =
+    [agentIndexByName "Q-learning V4 Reformed 30k + fallback" agentOptions]
+        , menuPlayField = PlayMapField
         }
 
 
 -- -----------------------------------------------------------------------------
--- Selection helpers
+-- General selection helpers
 -- -----------------------------------------------------------------------------
 
 -- | Moves an index cyclically through a collection of the given size.
@@ -141,10 +211,26 @@ itemAt index values
     | otherwise = Just (values !! index)
 
 
+-- | Applies one transformation to the item at the given list index.
+updateAt :: Int -> (value -> value) -> [value] -> [value]
+updateAt targetIndex transform values =
+    zipWith updateValue [0 ..] values
+  where
+    updateValue index value
+        | index == targetIndex = transform value
+        | otherwise = value
+
+
+-- | Returns the currently selected scenario.
+selectedScenario :: [Scenario] -> MenuWorld -> Maybe Scenario
+selectedScenario scenarios menu =
+    itemAt (menuScenarioIndex menu) scenarios
+
+
 -- | Returns the name of the currently selected scenario.
 selectedScenarioName :: [Scenario] -> MenuWorld -> String
 selectedScenarioName scenarios menu =
-    case itemAt (menuScenarioIndex menu) scenarios of
+    case selectedScenario scenarios menu of
         Just scenario -> scenarioName scenario
         Nothing -> "No scenario"
 
@@ -158,51 +244,466 @@ selectedAgentName agentOptions index =
 
 
 -- -----------------------------------------------------------------------------
+-- Dynamic Watch setup helpers
+-- -----------------------------------------------------------------------------
+
+-- | Returns the maximum Watch roster size supported by one scenario.
+watchAgentCapacity :: Scenario -> Int
+watchAgentCapacity scenario =
+    min maximumWatchAgentCount (scenarioMaximumWormCount scenario)
+
+
+-- | Returns the ordered fields currently visible on the Watch setup screen.
+--
+-- One field is generated for every active worm, making menu navigation adapt to
+-- additions and removals without hard-coded Worm 1 / Worm 2 constructors.
+watchSetupFields :: MenuWorld -> [WatchSetupField]
+watchSetupFields menu =
+    [WatchMapField]
+        ++ [WatchAgentField index | index <- [0 .. length (menuWatchAgentIndices menu) - 1]]
+        ++ [ WatchAddAgentField
+           , WatchRemoveAgentField
+           , WatchStartField
+           , WatchBackField
+           ]
+
+
+-- | Moves the selected Watch setup field by the given offset.
+moveWatchField :: Int -> MenuWorld -> MenuWorld
+moveWatchField change menu =
+    menu {menuWatchField = fields !! newIndex}
+  where
+    fields = watchSetupFields menu
+
+    currentIndex =
+        case elemIndex (menuWatchField menu) fields of
+            Just index -> index
+            Nothing -> 0
+
+    newIndex =
+        cycleIndex (length fields) change currentIndex
+
+
+-- | Keeps a Watch field valid after the number of configured agents changes.
+normalizeWatchField :: Int -> WatchSetupField -> WatchSetupField
+normalizeWatchField agentCount field =
+    case field of
+        WatchAgentField index
+            | agentCount <= 0 -> WatchMapField
+            | index >= agentCount -> WatchAgentField (agentCount - 1)
+
+        _ ->
+            field
+
+
+-- | Adjusts the configured Watch roster to the capacity of a selected scenario.
+--
+-- This is primarily relevant when switching between scenarios with different
+-- numbers of predefined starting positions.
+normalizeWatchMenuForScenario :: Scenario -> MenuWorld -> MenuWorld
+normalizeWatchMenuForScenario scenario menu =
+    menu
+        { menuWatchAgentIndices = trimmedIndices
+        , menuWatchField = normalizeWatchField (length trimmedIndices) (menuWatchField menu)
+        }
+  where
+    trimmedIndices =
+        take (watchAgentCapacity scenario) (menuWatchAgentIndices menu)
+
+
+-- | Returns whether another Watch agent can be added for the selected scenario.
+canAddWatchAgent :: [Scenario] -> MenuWorld -> Bool
+canAddWatchAgent scenarios menu =
+    case selectedScenario scenarios menu of
+        Nothing -> False
+        Just scenario ->
+            length (menuWatchAgentIndices menu) < watchAgentCapacity scenario
+
+
+-- | Returns whether the final Watch agent can be removed.
+canRemoveWatchAgent :: MenuWorld -> Bool
+canRemoveWatchAgent menu =
+    length (menuWatchAgentIndices menu) > minimumWatchAgentCount
+
+
+-- | Adds one Watch agent using Safe Greedy Food as the initial controller.
+--
+-- Focus moves directly to the newly added worm so its controller can be changed
+-- immediately with Left / Right.
+addWatchAgent :: [AgentOption] -> [Scenario] -> MenuWorld -> MenuWorld
+addWatchAgent agentOptions scenarios menu
+    | not (canAddWatchAgent scenarios menu) = menu
+    | otherwise =
+        menu
+            { menuWatchAgentIndices = newIndices
+            , menuWatchField = WatchAgentField newAgentIndex
+            }
+  where
+    newAgentIndex =
+        length (menuWatchAgentIndices menu)
+
+    defaultOptionIndex =
+        agentIndexByName "Safe Greedy Food" agentOptions
+
+    newIndices =
+        menuWatchAgentIndices menu ++ [defaultOptionIndex]
+
+
+-- | Removes the last configured Watch agent while preserving the minimum roster.
+removeLastWatchAgent :: MenuWorld -> MenuWorld
+removeLastWatchAgent menu
+    | not (canRemoveWatchAgent menu) = menu
+    | otherwise =
+        menu
+            { menuWatchAgentIndices = init (menuWatchAgentIndices menu)
+            , menuWatchField = WatchRemoveAgentField
+            }
+
+
+-- | Changes the selected value of the current Watch setup field.
+changeWatchValueBy :: Int -> [AgentOption] -> [Scenario] -> MenuWorld -> MenuWorld
+changeWatchValueBy change agentOptions scenarios menu =
+    case menuWatchField menu of
+        WatchMapField ->
+            changeScenario
+
+        WatchAgentField agentPosition ->
+            menu
+                { menuWatchAgentIndices =
+                    updateAt
+                        agentPosition
+                        (cycleIndex (length agentOptions) change)
+                        (menuWatchAgentIndices menu)
+                }
+
+        _ ->
+            menu
+  where
+    changedScenarioMenu =
+        menu
+            { menuScenarioIndex =
+                cycleIndex
+                    (length scenarios)
+                    change
+                    (menuScenarioIndex menu)
+            }
+
+    changeScenario =
+        case selectedScenario scenarios changedScenarioMenu of
+            Just scenario -> normalizeMenuForScenario scenario changedScenarioMenu
+            Nothing -> changedScenarioMenu
+
+
+-- -----------------------------------------------------------------------------
+-- Dynamic Play setup helpers
+-- -----------------------------------------------------------------------------
+
+-- | Returns the maximum number of AI opponents available in one scenario.
+--
+-- One predefined start is reserved for the human-controlled Worm 1.
+playOpponentCapacity :: Scenario -> Int
+playOpponentCapacity scenario =
+    min
+        maximumPlayOpponentCount
+        (max 0 (scenarioMaximumWormCount scenario - 1))
+
+
+-- | Returns the ordered fields currently visible on the Play setup screen.
+playSetupFields :: MenuWorld -> [PlaySetupField]
+playSetupFields menu =
+    [PlayMapField]
+        ++ [PlayOpponentField index | index <- [0 .. length (menuPlayOpponentIndices menu) - 1]]
+        ++ [ PlayAddOpponentField
+           , PlayRemoveOpponentField
+           , PlayStartField
+           , PlayBackField
+           ]
+
+
+-- | Moves the selected Play setup field by the given offset.
+movePlayField :: Int -> MenuWorld -> MenuWorld
+movePlayField change menu =
+    menu {menuPlayField = fields !! newIndex}
+  where
+    fields =
+        playSetupFields menu
+
+    currentIndex =
+        case elemIndex (menuPlayField menu) fields of
+            Just index -> index
+            Nothing -> 0
+
+    newIndex =
+        cycleIndex (length fields) change currentIndex
+
+
+-- | Keeps a Play field valid after the number of opponents changes.
+normalizePlayField :: Int -> PlaySetupField -> PlaySetupField
+normalizePlayField opponentCount field =
+    case field of
+        PlayOpponentField index
+            | opponentCount <= 0 -> PlayMapField
+            | index >= opponentCount -> PlayOpponentField (opponentCount - 1)
+
+        _ ->
+            field
+
+
+-- | Restricts the configured Play roster to the selected scenario's capacity.
+normalizePlayMenuForScenario :: Scenario -> MenuWorld -> MenuWorld
+normalizePlayMenuForScenario scenario menu =
+    menu
+        { menuPlayOpponentIndices = trimmedIndices
+        , menuPlayField =
+            normalizePlayField
+                (length trimmedIndices)
+                (menuPlayField menu)
+        }
+  where
+    trimmedIndices =
+        take
+            (playOpponentCapacity scenario)
+            (menuPlayOpponentIndices menu)
+
+
+-- | Normalizes both dynamic rosters after a scenario change.
+normalizeMenuForScenario :: Scenario -> MenuWorld -> MenuWorld
+normalizeMenuForScenario scenario =
+    normalizePlayMenuForScenario scenario
+        . normalizeWatchMenuForScenario scenario
+
+
+-- | Returns whether another AI opponent can be added in Play mode.
+canAddPlayOpponent :: [Scenario] -> MenuWorld -> Bool
+canAddPlayOpponent scenarios menu =
+    case selectedScenario scenarios menu of
+        Nothing -> False
+        Just scenario ->
+            length (menuPlayOpponentIndices menu) < playOpponentCapacity scenario
+
+
+-- | Returns whether the final Play opponent can be removed.
+canRemovePlayOpponent :: MenuWorld -> Bool
+canRemovePlayOpponent menu =
+    length (menuPlayOpponentIndices menu) > minimumPlayOpponentCount
+
+
+-- | Adds one AI opponent using Safe Greedy Food as its initial controller.
+addPlayOpponent :: [AgentOption] -> [Scenario] -> MenuWorld -> MenuWorld
+addPlayOpponent agentOptions scenarios menu
+    | not (canAddPlayOpponent scenarios menu) = menu
+    | otherwise =
+        menu
+            { menuPlayOpponentIndices = newIndices
+            , menuPlayField = PlayOpponentField newOpponentIndex
+            }
+  where
+    newOpponentIndex =
+        length (menuPlayOpponentIndices menu)
+
+    defaultOptionIndex =
+        agentIndexByName "Safe Greedy Food" agentOptions
+
+    newIndices =
+        menuPlayOpponentIndices menu ++ [defaultOptionIndex]
+
+
+-- | Removes the final configured AI opponent while preserving at least one.
+removeLastPlayOpponent :: MenuWorld -> MenuWorld
+removeLastPlayOpponent menu
+    | not (canRemovePlayOpponent menu) = menu
+    | otherwise =
+        menu
+            { menuPlayOpponentIndices = init (menuPlayOpponentIndices menu)
+            , menuPlayField = PlayRemoveOpponentField
+            }
+
+
+-- | Changes the currently selected value of the Play setup.
+changePlayValueBy :: Int -> [AgentOption] -> [Scenario] -> MenuWorld -> MenuWorld
+changePlayValueBy change agentOptions scenarios menu =
+    case menuPlayField menu of
+        PlayMapField ->
+            changeScenario
+
+        PlayOpponentField opponentPosition ->
+            menu
+                { menuPlayOpponentIndices =
+                    updateAt
+                        opponentPosition
+                        (cycleIndex (length agentOptions) change)
+                        (menuPlayOpponentIndices menu)
+                }
+
+        _ ->
+            menu
+  where
+    changedScenarioMenu =
+        menu
+            { menuScenarioIndex =
+                cycleIndex
+                    (length scenarios)
+                    change
+                    (menuScenarioIndex menu)
+            }
+
+    changeScenario =
+        case selectedScenario scenarios changedScenarioMenu of
+            Just scenario ->
+                normalizeMenuForScenario scenario changedScenarioMenu
+
+            Nothing ->
+                changedScenarioMenu
+
+
+-- -----------------------------------------------------------------------------
 -- Game mode construction
 -- -----------------------------------------------------------------------------
 
--- | Creates Watch Agents mode from the current setup selections.
+-- | Creates Watch Agents mode from the current dynamic roster.
 --
--- Watch mode currently assigns controllers to the first two worms defined by
--- the selected scenario.
-startWatch :: [AgentOption] -> [Scenario] -> MenuWorld -> Maybe AppWorld
-startWatch agentOptions scenarios menu = do
-    scenario <- itemAt (menuScenarioIndex menu) scenarios
-    firstOption <- itemAt (menuAgentOneIndex menu) agentOptions
-    secondOption <- itemAt (menuAgentTwoIndex menu) agentOptions
+-- Every configured controller is paired with the corresponding predefined worm
+-- start. Authored map food is discarded and replaced with the adaptive
+-- scenario-specific number of randomly positioned food items.
+startWatch :: [AgentOption] -> [Scenario] -> MenuWorld -> IO (Maybe AppWorld)
+startWatch agentOptions scenarios menu =
+    case selectedScenario scenarios menu of
+        Nothing ->
+            pure Nothing
 
-    case map wormId (scenarioWorms scenario) of
-        firstId : secondId : _ ->
-            let agents =
-                    [ makeGuiAgent firstId (makeColorI 50 140 255 255) firstOption
-                    , makeGuiAgent secondId (makeColorI 255 130 60 255) secondOption
-                    ]
-            in Just (AppWatch menu (initialGuiWorld agents (scenarioInitialState scenario)))
+        Just scenario
+            | wormCount < minimumWatchAgentCount ->
+                pure Nothing
 
-        _ -> Nothing
+            | wormCount > watchAgentCapacity scenario ->
+                pure Nothing
+
+            | otherwise ->
+                case
+                    ( scenarioInitialStateForWormCount wormCount scenario
+                    , mapM (\index -> itemAt index agentOptions) selectedIndices
+                    )
+                of
+                    (Just baseState, Just selectedOptions) -> do
+                        let foodTarget =
+                                scenarioFoodCountForWorms wormCount scenario
+
+                        initialState <-
+                            randomizeFoodCountAwayFromWorms foodTarget baseState
+
+                        let wormIds =
+                                map wormId (gameWorms initialState)
+
+                            agents =
+                                zipWith3
+                                    makeGuiAgent
+                                    wormIds
+                                    (take wormCount watchAgentColors)
+                                    selectedOptions
+
+                        if length agents == wormCount
+                            then
+                                pure $
+                                    Just $
+                                        AppWatch
+                                            menu
+                                            ( initialGuiWorldWithFoodTarget
+                                                foodTarget
+                                                agents
+                                                initialState
+                                            )
+
+                            else
+                                pure Nothing
+
+                    _ ->
+                        pure Nothing
+  where
+    selectedIndices =
+        menuWatchAgentIndices menu
+
+    wormCount =
+        length selectedIndices
 
 
--- | Creates Play vs Agent mode from the current setup selections.
+-- | Converts one selected agent option into a playable AI opponent.
+makePlayOpponent :: Int -> Color -> AgentOption -> PlayOpponent
+makePlayOpponent targetId opponentColor option =
+    PlayOpponent
+        { playOpponentWormId = targetId
+        , playOpponentName = agentOptionName option
+        , playOpponentController = agentOptionController option
+        , playOpponentColor = opponentColor
+        }
+
+-- | Creates Play vs Agents mode from the current dynamic opponent roster.
 --
--- The first scenario worm is controlled by the human and the second by the
--- selected AI opponent.
-startPlay :: [AgentOption] -> [Scenario] -> MenuWorld -> Maybe AppWorld
-startPlay agentOptions scenarios menu = do
-    scenario <- itemAt (menuScenarioIndex menu) scenarios
-    opponentOption <- itemAt (menuPlayOpponentIndex menu) agentOptions
+-- Worm 1 is controlled by the human. Authored food is cleared and the scenario's
+-- adaptive interactive food target is randomly distributed before play starts.
+startPlay :: [AgentOption] -> [Scenario] -> MenuWorld -> IO (Maybe AppWorld)
+startPlay agentOptions scenarios menu =
+    case selectedScenario scenarios menu of
+        Nothing ->
+            pure Nothing
 
-    case map wormId (scenarioWorms scenario) of
-        humanId : opponentId : _ ->
-            Just $
-                AppPlay menu $
-                    initialPlayWorld
-                        humanId
-                        opponentId
-                        (agentOptionName opponentOption)
-                        (agentOptionController opponentOption)
-                        (scenarioInitialState scenario)
+        Just scenario
+            | opponentCount < minimumPlayOpponentCount ->
+                pure Nothing
 
-        _ -> Nothing
+            | opponentCount > playOpponentCapacity scenario ->
+                pure Nothing
+
+            | otherwise ->
+                case
+                    ( scenarioInitialStateForWormCount wormCount scenario
+                    , mapM (\index -> itemAt index agentOptions) selectedIndices
+                    )
+                of
+                    (Just baseState, Just selectedOptions) -> do
+                        let foodTarget =
+                                scenarioFoodCountForWorms wormCount scenario
+
+                        initialState <-
+                            randomizeFoodCountAwayFromWorms foodTarget baseState
+
+                        case map wormId (gameWorms initialState) of
+                            humanId : opponentIds
+                                | length opponentIds == opponentCount ->
+                                    let colors =
+                                            take opponentCount (drop 1 watchAgentColors)
+
+                                        opponents =
+                                            zipWith3
+                                                makePlayOpponent
+                                                opponentIds
+                                                colors
+                                                selectedOptions
+                                    in
+                                        pure $
+                                            Just $
+                                                AppPlay
+                                                    menu
+                                                    ( initialPlayWorldWithFoodTarget
+                                                        foodTarget
+                                                        humanId
+                                                        opponents
+                                                        initialState
+                                                    )
+
+                            _ ->
+                                pure Nothing
+
+                    _ ->
+                        pure Nothing
+  where
+    selectedIndices =
+        menuPlayOpponentIndices menu
+
+    opponentCount =
+        length selectedIndices
+
+    wormCount =
+        opponentCount + 1
 
 
 -- -----------------------------------------------------------------------------
@@ -231,47 +732,42 @@ handleMainMenuEvent _ menu =
 -- Watch setup input
 -- -----------------------------------------------------------------------------
 
--- | Changes the currently selected Watch Agents value by the given offset.
-changeWatchValueBy :: Int -> Int -> Int -> MenuWorld -> MenuWorld
-changeWatchValueBy change scenarioCount agentCount menu =
-    case menuWatchField menu of
-        WatchMapField ->
-            menu {menuScenarioIndex = cycleIndex scenarioCount change (menuScenarioIndex menu)}
-
-        WatchAgentOneField ->
-            menu {menuAgentOneIndex = cycleIndex agentCount change (menuAgentOneIndex menu)}
-
-        WatchAgentTwoField ->
-            menu {menuAgentTwoIndex = cycleIndex agentCount change (menuAgentTwoIndex menu)}
-
-        _ -> menu
-
-
--- | Handles keyboard input on the Watch Agents setup screen.
+-- | Handles keyboard input on the dynamic Watch Agents setup screen.
 handleWatchSetupEvent :: [AgentOption] -> [Scenario] -> Event -> MenuWorld -> IO AppWorld
 handleWatchSetupEvent _ _ (EventKey (SpecialKey KeyUp) Down _ _) menu =
-    pure $ AppMenu menu {menuWatchField = previousEnum (menuWatchField menu)}
+    pure $ AppMenu $ moveWatchField (-1) menu
 
 handleWatchSetupEvent _ _ (EventKey (SpecialKey KeyDown) Down _ _) menu =
-    pure $ AppMenu menu {menuWatchField = nextEnum (menuWatchField menu)}
+    pure $ AppMenu $ moveWatchField 1 menu
 
 handleWatchSetupEvent agentOptions scenarios (EventKey (SpecialKey KeyLeft) Down _ _) menu =
-    pure $ AppMenu $ changeWatchValueBy (-1) (length scenarios) (length agentOptions) menu
+    pure $ AppMenu $ changeWatchValueBy (-1) agentOptions scenarios menu
 
 handleWatchSetupEvent agentOptions scenarios (EventKey (SpecialKey KeyRight) Down _ _) menu =
-    pure $ AppMenu $ changeWatchValueBy 1 (length scenarios) (length agentOptions) menu
+    pure $ AppMenu $ changeWatchValueBy 1 agentOptions scenarios menu
 
 handleWatchSetupEvent agentOptions scenarios (EventKey (SpecialKey KeyEnter) Down _ _) menu =
     case menuWatchField menu of
-        WatchStartField ->
-            case startWatch agentOptions scenarios menu of
-                Just world -> pure world
-                Nothing -> pure (AppMenu menu)
+        WatchAddAgentField ->
+            pure $ AppMenu $ addWatchAgent agentOptions scenarios menu
+
+        WatchRemoveAgentField ->
+            pure $ AppMenu $ removeLastWatchAgent menu
+
+        WatchStartField -> do
+            maybeWorld <-
+                startWatch agentOptions scenarios menu
+
+            pure $
+                case maybeWorld of
+                    Just world -> world
+                    Nothing -> AppMenu menu
 
         WatchBackField ->
             pure $ AppMenu menu {menuScreen = MainMenuScreen}
 
-        _ -> pure (AppMenu menu)
+        _ ->
+            pure (AppMenu menu)
 
 handleWatchSetupEvent _ _ (EventKey (SpecialKey KeyEsc) Down _ _) menu =
     pure $ AppMenu menu {menuScreen = MainMenuScreen}
@@ -284,44 +780,42 @@ handleWatchSetupEvent _ _ _ menu =
 -- Play setup input
 -- -----------------------------------------------------------------------------
 
--- | Changes the currently selected Play vs Agent value by the given offset.
-changePlayValueBy :: Int -> Int -> Int -> MenuWorld -> MenuWorld
-changePlayValueBy change scenarioCount agentCount menu =
-    case menuPlayField menu of
-        PlayMapField ->
-            menu {menuScenarioIndex = cycleIndex scenarioCount change (menuScenarioIndex menu)}
-
-        PlayOpponentField ->
-            menu {menuPlayOpponentIndex = cycleIndex agentCount change (menuPlayOpponentIndex menu)}
-
-        _ -> menu
-
-
--- | Handles keyboard input on the Play vs Agent setup screen.
+-- | Handles keyboard input on the dynamic Play vs Agents setup screen.
 handlePlaySetupEvent :: [AgentOption] -> [Scenario] -> Event -> MenuWorld -> IO AppWorld
 handlePlaySetupEvent _ _ (EventKey (SpecialKey KeyUp) Down _ _) menu =
-    pure $ AppMenu menu {menuPlayField = previousEnum (menuPlayField menu)}
+    pure $ AppMenu $ movePlayField (-1) menu
 
 handlePlaySetupEvent _ _ (EventKey (SpecialKey KeyDown) Down _ _) menu =
-    pure $ AppMenu menu {menuPlayField = nextEnum (menuPlayField menu)}
+    pure $ AppMenu $ movePlayField 1 menu
 
 handlePlaySetupEvent agentOptions scenarios (EventKey (SpecialKey KeyLeft) Down _ _) menu =
-    pure $ AppMenu $ changePlayValueBy (-1) (length scenarios) (length agentOptions) menu
+    pure $ AppMenu $ changePlayValueBy (-1) agentOptions scenarios menu
 
 handlePlaySetupEvent agentOptions scenarios (EventKey (SpecialKey KeyRight) Down _ _) menu =
-    pure $ AppMenu $ changePlayValueBy 1 (length scenarios) (length agentOptions) menu
+    pure $ AppMenu $ changePlayValueBy 1 agentOptions scenarios menu
 
 handlePlaySetupEvent agentOptions scenarios (EventKey (SpecialKey KeyEnter) Down _ _) menu =
     case menuPlayField menu of
-        PlayStartField ->
-            case startPlay agentOptions scenarios menu of
-                Just world -> pure world
-                Nothing -> pure (AppMenu menu)
+        PlayAddOpponentField ->
+            pure $ AppMenu $ addPlayOpponent agentOptions scenarios menu
+
+        PlayRemoveOpponentField ->
+            pure $ AppMenu $ removeLastPlayOpponent menu
+
+        PlayStartField -> do
+            maybeWorld <-
+                startPlay agentOptions scenarios menu
+
+            pure $
+                case maybeWorld of
+                    Just world -> world
+                    Nothing -> AppMenu menu
 
         PlayBackField ->
             pure $ AppMenu menu {menuScreen = MainMenuScreen}
 
-        _ -> pure (AppMenu menu)
+        _ ->
+            pure (AppMenu menu)
 
 handlePlaySetupEvent _ _ (EventKey (SpecialKey KeyEsc) Down _ _) menu =
     pure $ AppMenu menu {menuScreen = MainMenuScreen}
@@ -338,9 +832,14 @@ handlePlaySetupEvent _ _ _ menu =
 handleAppEvent :: [AgentOption] -> [Scenario] -> Event -> AppWorld -> IO AppWorld
 handleAppEvent agentOptions scenarios event (AppMenu menu) =
     case menuScreen menu of
-        MainMenuScreen -> handleMainMenuEvent event menu
-        WatchSetupScreen -> handleWatchSetupEvent agentOptions scenarios event menu
-        PlaySetupScreen -> handlePlaySetupEvent agentOptions scenarios event menu
+        MainMenuScreen ->
+            handleMainMenuEvent event menu
+
+        WatchSetupScreen ->
+            handleWatchSetupEvent agentOptions scenarios event menu
+
+        PlaySetupScreen ->
+            handlePlaySetupEvent agentOptions scenarios event menu
 
 handleAppEvent _ _ (EventKey (SpecialKey KeyEsc) Down _ _) (AppWatch menu _) =
     pure $ AppMenu menu {menuScreen = WatchSetupScreen}
@@ -358,7 +857,7 @@ handleAppEvent _ _ event (AppPlay menu playWorld) = do
 
 
 -- -----------------------------------------------------------------------------
--- Menu drawing
+-- Shared menu drawing
 -- -----------------------------------------------------------------------------
 
 -- | Draws one selectable row of the main menu.
@@ -367,6 +866,70 @@ drawMenuRow selected y contents =
     drawMenuOptionRow (-290) y 580 selected contents
 
 
+-- | Draws one compact controller-selection row on the Watch setup screen.
+--
+-- Compact rows allow the same layout to accommodate up to nine configured
+-- worms without requiring scrolling.
+drawCompactAgentSettingRow :: Float -> Bool -> String -> String -> Picture
+drawCompactAgentSettingRow top selected label value =
+    pictures
+        [ drawBox (-325) top 650 34 rowFill
+        , translate 0 (top - 17) $
+            color borderColor $
+                rectangleWire 650 34
+        , drawBox (-325) top 5 34 accentFill
+        , drawGuiText (-307) (top - 23) 0.085 uiMutedColor label
+        , drawGuiText (-218) (top - 23) 0.088 textColor ("< " ++ shortenText 50 value ++ " >")
+        ]
+  where
+    rowFill =
+        if selected then uiSelectedFill else makeColorI 24 28 34 255
+
+    borderColor =
+        if selected then uiAccentColor else uiBorderColor
+
+    accentFill =
+        if selected then uiAccentColor else rowFill
+
+    textColor =
+        if selected then white else greyN 0.88
+
+
+-- | Draws one compact Watch setup button, optionally in a disabled state.
+drawCompactSetupButton :: Float -> Float -> Float -> Bool -> Bool -> String -> Picture
+drawCompactSetupButton left top width selected enabled label =
+    pictures
+        [ drawBox left top width 34 rowFill
+        , translate (left + width / 2) (top - 17) $
+            color borderColor $
+                rectangleWire width 34
+        , drawBox left top 5 34 accentFill
+        , drawGuiText (left + 18) (top - 23) 0.085 textColor label
+        ]
+  where
+    rowFill
+        | not enabled = makeColorI 20 23 28 255
+        | selected = uiSelectedFill
+        | otherwise = makeColorI 24 28 34 255
+
+    borderColor
+        | selected = uiAccentColor
+        | otherwise = uiBorderColor
+
+    accentFill
+        | selected = uiAccentColor
+        | otherwise = rowFill
+
+    textColor
+        | not enabled = greyN 0.48
+        | selected = white
+        | otherwise = greyN 0.86
+
+
+-- -----------------------------------------------------------------------------
+-- Main menu drawing
+-- -----------------------------------------------------------------------------
+
 -- | Draws the main CerviQ menu.
 drawMainMenu :: MenuWorld -> Picture
 drawMainMenu menu =
@@ -374,56 +937,259 @@ drawMainMenu menu =
         [ drawPanel (-360) 275 720 470
         , drawTitle (-285) 205 "CerviQ" "Q-learning worm arena"
         , drawMenuRow (menuMainSelection menu == 0) 95 "Watch Agents"
-        , drawMenuRow (menuMainSelection menu == 1) 40 "Play vs Agent"
+        , drawMenuRow (menuMainSelection menu == 1) 40 "Play vs Agents"
         , drawMenuRow (menuMainSelection menu == 2) (-15) "Quit"
         , drawFooter (-285) (-150) ["UP/DOWN select", "ENTER confirm"]
         ]
 
 
--- | Draws the Watch Agents setup screen.
+-- -----------------------------------------------------------------------------
+-- Watch setup drawing
+-- -----------------------------------------------------------------------------
+
+-- | Draws the dynamic Watch Agents setup screen.
+--
+-- Agent rows are deliberately compact so the interface remains usable with up
+-- to nine worms. Add and Remove controls modify only the setup roster; once a
+-- simulation starts, its roster remains fixed.
 drawWatchSetup :: [AgentOption] -> [Scenario] -> MenuWorld -> Picture
 drawWatchSetup agentOptions scenarios menu =
     pictures
-        [ drawPanel (-395) 325 790 620
-        , drawTitle (-325) 255 "Watch Agents" "Compare two controllers and inspect their decisions."
-        , drawSettingRow (-325) 150 650 (menuWatchField menu == WatchMapField) "Map" scenarioName'
-        , drawSettingRow (-325) 72 650 (menuWatchField menu == WatchAgentOneField) "Worm 1" firstAgentName
-        , drawSettingRow (-325) (-6) 650 (menuWatchField menu == WatchAgentTwoField) "Worm 2" secondAgentName
-        , drawActionRow (-325) (-108) 650 (menuWatchField menu == WatchStartField) "Start"
-        , drawActionRow (-325) (-160) 650 (menuWatchField menu == WatchBackField) "Back"
-        , drawFooter (-325) (-245) ["UP/DOWN field", "LEFT/RIGHT value", "ENTER confirm", "ESC back"]
-        ]
+        ( [ drawPanel (-395) 350 790 730
+          , drawTitle (-325) 300 "Watch Agents" "Configure multiple AI worms and inspect their decisions."
+          , drawSettingRow (-325) 215 650 (menuWatchField menu == WatchMapField) "Map" scenarioName'
+          , drawSectionHeader (-325) 118 white agentsHeader
+          ]
+            ++ agentRows
+            ++ [ drawCompactSetupButton
+                    (-325)
+                    controlsTop
+                    314
+                    (menuWatchField menu == WatchAddAgentField)
+                    addEnabled
+                    "+ Add agent"
+
+               , drawCompactSetupButton
+                    11
+                    controlsTop
+                    314
+                    (menuWatchField menu == WatchRemoveAgentField)
+                    removeEnabled
+                    "- Remove last"
+
+               , drawCompactSetupButton
+                    (-325)
+                    actionsTop
+                    314
+                    (menuWatchField menu == WatchStartField)
+                    True
+                    "Start"
+
+               , drawCompactSetupButton
+                    11
+                    actionsTop
+                    314
+                    (menuWatchField menu == WatchBackField)
+                    True
+                    "Back"
+
+               , drawFooter
+                    (-325)
+                    (-358)
+                    ["UP/DOWN field", "LEFT/RIGHT agent", "ENTER action", "ESC back"]
+               ]
+        )
   where
-    scenarioName' = selectedScenarioName scenarios menu
-    firstAgentName = selectedAgentName agentOptions (menuAgentOneIndex menu)
-    secondAgentName = selectedAgentName agentOptions (menuAgentTwoIndex menu)
+    agentIndices =
+        menuWatchAgentIndices menu
+
+    agentCount =
+        length agentIndices
+
+    scenarioName' =
+        selectedScenarioName scenarios menu
+
+    capacity =
+        case selectedScenario scenarios menu of
+            Just scenario -> watchAgentCapacity scenario
+            Nothing -> 0
+
+    agentsHeader =
+        "Agents (" ++ show agentCount ++ " / " ++ show capacity ++ " available)"
+
+    agentStartTop =
+        96
+
+    agentSpacing =
+        38
+
+    controlsTop =
+        agentStartTop - fromIntegral agentCount * agentSpacing - 14
+
+    actionsTop =
+        controlsTop - 46
+
+    addEnabled =
+        canAddWatchAgent scenarios menu
+
+    removeEnabled =
+        canRemoveWatchAgent menu
+
+    agentRows =
+        zipWith drawAgentRow [0 ..] agentIndices
+
+    drawAgentRow :: Int -> Int -> Picture
+    drawAgentRow rosterIndex optionIndex =
+        drawCompactAgentSettingRow
+            (agentStartTop - fromIntegral rosterIndex * agentSpacing)
+            (menuWatchField menu == WatchAgentField rosterIndex)
+            ("Worm " ++ show (rosterIndex + 1))
+            (selectedAgentName agentOptions optionIndex)
 
 
--- | Draws the Play vs Agent setup screen.
+-- -----------------------------------------------------------------------------
+-- Play setup drawing
+-- -----------------------------------------------------------------------------
+
+-- | Draws the dynamic Play vs Agents setup screen.
+--
+-- Worm 1 is reserved for the human. The remaining compact rows configure the
+-- AI worms independently and adapt to the selected scenario's capacity.
 drawPlaySetup :: [AgentOption] -> [Scenario] -> MenuWorld -> Picture
 drawPlaySetup agentOptions scenarios menu =
     pictures
-        [ drawPanel (-395) 325 790 620
-        , drawTitle (-325) 255 "Play vs Agent" "Control Worm 1 with global arrow movement."
-        , drawSettingRow (-325) 145 650 (menuPlayField menu == PlayMapField) "Map" scenarioName'
-        , drawSettingRow (-325) 67 650 (menuPlayField menu == PlayOpponentField) "Opponent" opponentName
-        , drawActionRow (-325) (-34) 650 (menuPlayField menu == PlayStartField) "Start"
-        , drawActionRow (-325) (-86) 650 (menuPlayField menu == PlayBackField) "Back"
-        , drawFooter (-325) (-160) ["In game: ARROWS move", "SPACE pause", "R restart", "+/- speed"]
-        , drawFooter (-325) (-245) ["UP/DOWN field", "LEFT/RIGHT value", "ENTER confirm", "ESC back"]
-        ]
+        ( [ drawPanel (-395) 350 790 730
+          , drawTitle
+                (-325)
+                300
+                "Play vs Agents"
+                "Control Worm 1 and configure one or more AI opponents."
+
+          , drawSettingRow
+                (-325)
+                215
+                650
+                (menuPlayField menu == PlayMapField)
+                "Map"
+                scenarioName'
+
+          , drawSectionHeader
+                (-325)
+                118
+                white
+                opponentsHeader
+          ]
+            ++ opponentRows
+            ++ [ drawCompactSetupButton
+                    (-325)
+                    controlsTop
+                    314
+                    (menuPlayField menu == PlayAddOpponentField)
+                    addEnabled
+                    "+ Add opponent"
+
+               , drawCompactSetupButton
+                    11
+                    controlsTop
+                    314
+                    (menuPlayField menu == PlayRemoveOpponentField)
+                    removeEnabled
+                    "- Remove last"
+
+               , drawCompactSetupButton
+                    (-325)
+                    actionsTop
+                    314
+                    (menuPlayField menu == PlayStartField)
+                    True
+                    "Start"
+
+               , drawCompactSetupButton
+                    11
+                    actionsTop
+                    314
+                    (menuPlayField menu == PlayBackField)
+                    True
+                    "Back"
+
+               , drawFooter
+                    (-325)
+                    (-330)
+                    ["In game: ARROWS move", "SPACE pause", "R restart", "+/- speed"]
+
+               , drawFooter
+                    (-325)
+                    (-358)
+                    ["UP/DOWN field", "LEFT/RIGHT agent", "ENTER action", "ESC back"]
+               ]
+        )
   where
-    scenarioName' = selectedScenarioName scenarios menu
-    opponentName = selectedAgentName agentOptions (menuPlayOpponentIndex menu)
+    opponentIndices =
+        menuPlayOpponentIndices menu
+
+    opponentCount =
+        length opponentIndices
+
+    scenarioName' =
+        selectedScenarioName scenarios menu
+
+    capacity =
+        case selectedScenario scenarios menu of
+            Just scenario -> playOpponentCapacity scenario
+            Nothing -> 0
+
+    opponentsHeader =
+        "AI opponents ("
+            ++ show opponentCount
+            ++ " / "
+            ++ show capacity
+            ++ " available)"
+
+    opponentStartTop =
+        96
+
+    opponentSpacing =
+        38
+
+    controlsTop =
+        opponentStartTop
+            - fromIntegral opponentCount * opponentSpacing
+            - 14
+
+    actionsTop =
+        controlsTop - 46
+
+    addEnabled =
+        canAddPlayOpponent scenarios menu
+
+    removeEnabled =
+        canRemovePlayOpponent menu
+
+    opponentRows =
+        zipWith drawOpponentRow [0 ..] opponentIndices
+
+    -- | Draws one independently configurable AI opponent.
+    drawOpponentRow :: Int -> Int -> Picture
+    drawOpponentRow rosterIndex optionIndex =
+        drawCompactAgentSettingRow
+            (opponentStartTop - fromIntegral rosterIndex * opponentSpacing)
+            (menuPlayField menu == PlayOpponentField rosterIndex)
+            ("Worm " ++ show (rosterIndex + 2))
+            (selectedAgentName agentOptions optionIndex)
 
 
 -- | Draws the currently active menu screen.
 drawMenuWorld :: [AgentOption] -> [Scenario] -> MenuWorld -> Picture
 drawMenuWorld agentOptions scenarios menu =
     case menuScreen menu of
-        MainMenuScreen -> drawMainMenu menu
-        WatchSetupScreen -> drawWatchSetup agentOptions scenarios menu
-        PlaySetupScreen -> drawPlaySetup agentOptions scenarios menu
+        MainMenuScreen ->
+            drawMainMenu menu
+
+        WatchSetupScreen ->
+            drawWatchSetup agentOptions scenarios menu
+
+        PlaySetupScreen ->
+            drawPlaySetup agentOptions scenarios menu
 
 
 -- -----------------------------------------------------------------------------
