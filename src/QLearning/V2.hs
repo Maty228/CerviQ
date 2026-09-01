@@ -1,3 +1,17 @@
+{-|
+Module      : QLearning.V2
+Description : Second tabular Q-learning state representation for CerviQ.
+
+Version 2 redesigns the V1 state while intentionally keeping the same reward
+function. Food direction becomes relative to the worm's orientation, and
+reachable space is evaluated separately after each possible action rather than
+as one global value.
+
+Keeping the reward unchanged makes the V1/V2 comparison primarily a comparison
+of state representations. The generic Q-learning algorithm remains in
+"QLearning.Core".
+-}
+
 module QLearning.V2
     ( Danger(..)
     , SpaceLevel(..)
@@ -30,6 +44,7 @@ import qualified Data.Set as Set
 import qualified QLearning.Core as Core
 import qualified QLearning.Debug as Debug
 
+
 -- -----------------------------------------------------------------------------
 -- RL state representation
 -- -----------------------------------------------------------------------------
@@ -41,7 +56,7 @@ data Danger
     deriving (Show, Read, Eq, Ord)
 
 
--- | Coarse estimate of the reachable space after an action.
+-- | Coarse estimate of the reachable space after one candidate action.
 data SpaceLevel
     = Trapped
     | Tight
@@ -49,7 +64,7 @@ data SpaceLevel
     deriving (Show, Read, Eq, Ord)
 
 
--- | Forward position of the nearest food relative to the worm's orientation.
+-- | Position of the nearest food along the worm's forward/backward axis.
 data ForwardFoodDirection
     = FoodAhead
     | FoodSameForward
@@ -57,7 +72,7 @@ data ForwardFoodDirection
     deriving (Show, Read, Eq, Ord)
 
 
--- | Side position of the nearest food relative to the worm's orientation.
+-- | Position of the nearest food along the worm's left/right axis.
 data SideFoodDirection
     = FoodLeft
     | FoodSameSide
@@ -65,10 +80,11 @@ data SideFoodDirection
     deriving (Show, Read, Eq, Ord)
 
 
--- | Version-2 RL state.
+-- | Version-2 state used as the key of the tabular Q-table.
 --
--- Unlike version 1, spatial safety is evaluated separately after each possible
--- action and food direction is represented relative to the worm's orientation.
+-- Unlike V1, food direction is relative to the worm's orientation and the
+-- available space is evaluated separately after turning left, continuing
+-- straight, or turning right.
 data RLState = RLState
     {
         dangerLeft :: Danger,
@@ -84,13 +100,12 @@ data RLState = RLState
 
 
 -- -----------------------------------------------------------------------------
--- Conversion helpers
+-- State conversion helpers
 -- -----------------------------------------------------------------------------
 
--- | Converts a Boolean danger flag into a Danger value.
+-- | Converts a Boolean danger flag into the V2 danger category.
 dangerFromBool :: Bool -> Danger
 dangerFromBool True = Dangerous
-
 dangerFromBool False = Safe
 
 
@@ -98,10 +113,11 @@ dangerFromBool False = Safe
 -- Relative food direction
 -- -----------------------------------------------------------------------------
 
--- | Returns the nearest food displacement in worm-relative coordinates.
+-- | Converts the displacement to food into worm-relative coordinates.
 --
--- The first component is positive in front of the worm.
--- The second component is positive to the worm's right.
+-- The first returned component is positive in front of the worm and negative
+-- behind it. The second is positive to the worm's right and negative to its
+-- left.
 relativeFoodDeltas :: Worm -> Position -> (Int, Int)
 relativeFoodDeltas worm (foodX, foodY) =
     case wormDirection worm of
@@ -114,7 +130,8 @@ relativeFoodDeltas worm (foodX, foodY) =
     dx = foodX - headX
     dy = foodY - headY
 
--- | Computes the forward relation of food to the worm.
+
+-- | Returns the nearest food's forward/backward relation to the worm.
 forwardFoodDirection :: Worm -> Position -> ForwardFoodDirection
 forwardFoodDirection worm food =
     case compare forwardDelta 0 of
@@ -125,7 +142,7 @@ forwardFoodDirection worm food =
     (forwardDelta, _) = relativeFoodDeltas worm food
 
 
--- | Computes the sideways relation of food to the worm.
+-- | Returns the nearest food's left/right relation to the worm.
 sideFoodDirection :: Worm -> Position -> SideFoodDirection
 sideFoodDirection worm food =
     case compare sideDelta 0 of
@@ -134,26 +151,27 @@ sideFoodDirection worm food =
         GT -> FoodRight
   where
     (_, sideDelta) = relativeFoodDeltas worm food
-    
+
 
 -- -----------------------------------------------------------------------------
 -- Reachable space
 -- -----------------------------------------------------------------------------
 
--- | Returns all four neighbouring cells of a map position.
+-- | Returns all four orthogonal neighbours of a map position.
 neighbours :: Position -> [Position]
 neighbours (x, y) =
-    [
-        (x + 1, y),
-        (x - 1, y),
-        (x, y + 1),
-        (x, y - 1)
-    ]
+    [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
 
--- | Returns True if a cell blocks the version-2 reachable-area search.
+
+-- | Returns whether a position blocks the V2 reachable-area search.
+--
+-- The controlled worm's current head is removed from the occupied set so it
+-- can serve as the flood-fill starting position.
 blocksReachableArea :: GameState -> Worm -> Position -> Bool
 blocksReachableArea state worm position =
-    isBlocked currentMap position || isPoison currentMap position || position `Set.member` occupiedWithoutOwnHead
+    isBlocked currentMap position
+        || isPoison currentMap position
+        || position `Set.member` occupiedWithoutOwnHead
   where
     currentMap = gameMap state
     aliveWorms = filter wormAlive (gameWorms state)
@@ -161,9 +179,10 @@ blocksReachableArea state worm position =
     occupiedWithoutOwnHead = Set.delete (wormHead worm) occupied
 
 
--- | Counts cells reachable from the worm's current head.
+-- | Counts cells reachable from the worm's current head using flood fill.
 reachableArea :: GameState -> Worm -> Int
-reachableArea state worm = floodFill Set.empty [wormHead worm]
+reachableArea state worm =
+    floodFill Set.empty [wormHead worm]
   where
     floodFill visited [] = Set.size visited
     floodFill visited (position : rest)
@@ -172,10 +191,12 @@ reachableArea state worm = floodFill Set.empty [wormHead worm]
         | otherwise =
             let newVisited = Set.insert position visited
                 newFrontier = neighbours position ++ rest
-            in
-                floodFill newVisited newFrontier
+            in floodFill newVisited newFrontier
 
--- | Converts reachable area into a space category relative to worm length.
+
+-- | Converts reachable area into a category relative to the worm's length.
+--
+-- Unlike V1's fixed thresholds, V2 scales its categories with body length.
 spaceFromArea :: Worm -> Int -> SpaceLevel
 spaceFromArea worm area
     | area <= wormLength = Trapped
@@ -185,17 +206,18 @@ spaceFromArea worm area
     wormLength = length (wormBody worm)
 
 
--- | Replaces one worm in a list with its updated version.
+-- | Replaces one worm in a complete worm list with a hypothetical version.
 replaceWorm :: Worm -> [Worm] -> [Worm]
 replaceWorm updatedWorm worms =
-    [
-        if wormId worm == wormId updatedWorm
-            then updatedWorm
-            else worm
-        | worm <- worms
+    [ if wormId worm == wormId updatedWorm then updatedWorm else worm
+    | worm <- worms
     ]
 
--- | Computes the hypothetical worm state after one action.
+
+-- | Simulates the controlled worm after one candidate action.
+--
+-- Growth is included when the candidate head position currently contains food.
+-- Other worms are not moved.
 wormAfterAction :: GameState -> Worm -> Action -> Worm
 wormAfterAction state worm action =
     moveWormAfterAction grows action worm
@@ -203,47 +225,47 @@ wormAfterAction state worm action =
     nextHead = headAfterAction worm action
     grows = isFood (gameMap state) nextHead
 
--- | Computes the raw reachable area after performing one candidate action.
+
+-- | Computes raw reachable area after performing one candidate action.
 --
--- This is mainly used for debugging and future state representations.
--- It returns zero for immediately unsafe actions.
+-- Immediately unsafe actions return zero. Otherwise the controlled worm is
+-- replaced by its hypothetical moved version and flood fill is performed in
+-- that resulting local state. Opponent movement is not predicted.
 reachableAreaAfterAction :: GameState -> Worm -> Action -> Int
 reachableAreaAfterAction state worm action
     | action `notElem` safeActions state worm = 0
     | otherwise = reachableArea hypotheticalState movedWorm
-
   where
     movedWorm = wormAfterAction state worm action
-    hypotheticalState = state { gameWorms = replaceWorm movedWorm (gameWorms state) }
+    hypotheticalState = state {gameWorms = replaceWorm movedWorm (gameWorms state)}
 
--- | Estimates reachable space after performing one candidate action.
+
+-- | Converts reachable area after one candidate action into a space category.
 --
--- Immediately unsafe actions are considered trapped. Safe actions are first
--- simulated and reachable space is then measured from the resulting position.
+-- Every immediately unsafe action is therefore categorized as 'Trapped'.
 spaceAfterAction :: GameState -> Worm -> Action -> SpaceLevel
 spaceAfterAction state worm action =
     spaceFromArea worm (reachableAreaAfterAction state worm action)
 
 
--- | Returns how many safe actions would be available on the next turn
--- after performing one candidate action.
+-- | Returns how many immediately safe actions would remain on the next turn.
 --
--- Immediately unsafe actions return zero. Opponent movement is not predicted;
--- opponents remain at their current positions in the hypothetical state.
+-- This value is used only for diagnostics, not as a field of the V2 Q-learning
+-- state. Opponents remain at their current positions in the hypothetical state.
 nextSafeMoveCountAfterAction :: GameState -> Worm -> Action -> Int
 nextSafeMoveCountAfterAction state worm action
     | action `notElem` safeActions state worm = 0
     | otherwise = length (safeActions hypotheticalState movedWorm)
-
   where
     movedWorm = wormAfterAction state worm action
-    hypotheticalState = state { gameWorms = replaceWorm movedWorm (gameWorms state) }
+    hypotheticalState = state {gameWorms = replaceWorm movedWorm (gameWorms state)}
+
 
 -- -----------------------------------------------------------------------------
 -- State encoding
 -- -----------------------------------------------------------------------------
 
--- | Encodes the game from one worm's perspective using version-2 features.
+-- | Encodes the current game situation from one worm's V2 perspective.
 encodeState :: GameState -> Worm -> RLState
 encodeState state worm =
     RLState
@@ -251,16 +273,13 @@ encodeState state worm =
             dangerLeft = dangerFromBool (TurnLeft `notElem` safe),
             dangerStraight = dangerFromBool (GoStraight `notElem` safe),
             dangerRight = dangerFromBool (TurnRight `notElem` safe),
-
             spaceLeft = spaceAfterAction state worm TurnLeft,
             spaceStraight = spaceAfterAction state worm GoStraight,
             spaceRight = spaceAfterAction state worm TurnRight,
-
             foodForward =
                 case nearest of
                     Nothing -> FoodSameForward
                     Just food -> forwardFoodDirection worm food,
-
             foodSideways =
                 case nearest of
                     Nothing -> FoodSameSide
@@ -275,45 +294,40 @@ encodeState state worm =
 -- Reward
 -- -----------------------------------------------------------------------------
 
--- | Computes the distance from the worm to the nearest food.
+-- | Returns Manhattan distance from the worm to the nearest food.
 distanceToNearestFood :: GameState -> Worm -> Maybe Int
-distanceToNearestFood state worm = fmap (distance (wormHead worm)) (nearestFood state worm)
+distanceToNearestFood state worm =
+    fmap (distance (wormHead worm)) (nearestFood state worm)
 
 
--- | Computes shaping reward for moving closer to or farther from food.
+-- | Computes reward shaping for progress towards the nearest food.
+--
+-- Eating already has its own larger reward, so distance shaping is suppressed
+-- on transitions where food was consumed.
 foodDistanceReward :: GameState -> Worm -> GameState -> Worm -> Double
 foodDistanceReward beforeState beforeWorm afterState afterWorm
     | Core.wormFoodDelta beforeWorm afterWorm > 0 = 0
     | otherwise =
-        case
-            (
-                distanceToNearestFood beforeState beforeWorm,
-                distanceToNearestFood afterState afterWorm
-            )
-        of
+        case (distanceToNearestFood beforeState beforeWorm, distanceToNearestFood afterState afterWorm) of
             (Just beforeDistance, Just afterDistance)
                 | afterDistance < beforeDistance -> 2
                 | afterDistance > beforeDistance -> -2
                 | otherwise -> 0
             _ -> 0
 
--- | Computes the version-2 reward for one transition.
+
+-- | Computes the V2 reward for one transition.
 --
--- Version 2 intentionally keeps the same reward function as version 1 so the
--- first V1/V2 comparison isolates the effect of the state representation.
+-- V2 intentionally keeps exactly the same shaped reward as V1 so their
+-- comparison primarily measures the effect of the redesigned state
+-- representation.
 rewardForStep :: GameState -> Worm -> GameState -> Worm -> Double
 rewardForStep beforeState beforeWorm afterState afterWorm =
-    foodReward +  killReward+ deathPenalty+ distanceReward+ timePenalty
+    foodReward + killReward + deathPenalty + distanceReward + timePenalty
   where
     foodReward = 50 * fromIntegral (Core.wormFoodDelta beforeWorm afterWorm)
-
     killReward = 10 * fromIntegral (Core.wormKillDelta beforeWorm afterWorm)
-
-    deathPenalty =
-        if Core.wormDied beforeWorm afterWorm
-            then -100
-            else 0
-
+    deathPenalty = if Core.wormDied beforeWorm afterWorm then -100 else 0
     distanceReward = foodDistanceReward beforeState beforeWorm afterState afterWorm
     timePenalty = -1
 
@@ -322,7 +336,7 @@ rewardForStep beforeState beforeWorm afterState afterWorm =
 -- V2 Q-learning specification
 -- -----------------------------------------------------------------------------
 
--- | Complete Q-learning specification of version 2.
+-- | Complete version-specific specification passed to the shared Q-learning core.
 v2Spec :: Core.QLearningSpec RLState
 v2Spec =
     Core.QLearningSpec
@@ -332,65 +346,64 @@ v2Spec =
         }
 
 
--- | Q-table used by Q-learning version 2.
+-- | Q-table whose keys use the V2 state representation.
 type QTable = Core.QTable RLState
 
 
--- | Saves a version-2 Q-table.
+-- | Saves a V2 Q-table.
 saveQTable :: FilePath -> QTable -> IO ()
 saveQTable = Core.saveQTable
 
 
--- | Loads a version-2 Q-table.
+-- | Loads a V2 Q-table.
 loadQTable :: FilePath -> IO QTable
 loadQTable = Core.loadQTable
 
 
--- | Creates the greedy version-2 learned agent.
+-- | Creates a greedy learned agent from a V2 Q-table.
 qLearningAgent :: QTable -> Agent
 qLearningAgent = Core.qLearningAgent v2Spec
+
 
 -- -----------------------------------------------------------------------------
 -- V2 debugging
 -- -----------------------------------------------------------------------------
 
--- | Converts a version-2 state into human-readable debug values.
+-- | Converts a V2 encoded state into human-readable diagnostic values.
 describeState :: RLState -> [(String, String)]
 describeState state =
-    [
-        ( "Danger L/S/R", show (dangerLeft state) ++ " / " ++ show (dangerStraight state) ++ " / " ++ show (dangerRight state) ),
-        ( "Space L/S/R", show (spaceLeft state) ++ " / " ++ show (spaceStraight state) ++ " / " ++ show (spaceRight state) ),
-        ( "Food forward", show (foodForward state) ),
-        ( "Food sideways", show (foodSideways state) )
+    [ ("Danger L/S/R", show (dangerLeft state) ++ " / " ++ show (dangerStraight state) ++ " / " ++ show (dangerRight state))
+    , ("Space L/S/R", show (spaceLeft state) ++ " / " ++ show (spaceStraight state) ++ " / " ++ show (spaceRight state))
+    , ("Food forward", show (foodForward state))
+    , ("Food sideways", show (foodSideways state))
     ]
 
 
--- | Creates debugging information for a version-2 learned agent.
+-- | Creates version-independent GUI diagnostics for a V2 learned agent.
+--
+-- In addition to the encoded state and Q-values, the V2 debugger exposes raw
+-- reachable areas and the number of safe next moves. These extra values help
+-- inspect the state abstraction but are not part of the learned state itself.
 v2DebugProvider :: QTable -> Debug.AgentDebugProvider
 v2DebugProvider table gameState worm =
-    let
-        state = encodeState gameState worm
-        leftArea = reachableAreaAfterAction gameState worm TurnLeft
-        straightArea = reachableAreaAfterAction gameState worm GoStraight
-        rightArea = reachableAreaAfterAction gameState worm TurnRight
-        leftNextMoves = nextSafeMoveCountAfterAction gameState worm TurnLeft
-        straightNextMoves = nextSafeMoveCountAfterAction gameState worm GoStraight
-        rightNextMoves = nextSafeMoveCountAfterAction gameState worm TurnRight
-        qValues = Core.qValuesForState table state
-        best = Core.bestQActions table state
+    Debug.AgentDebugInfo
+        {
+            Debug.debugStateLines =
+                describeState state
+                    ++ [ ("Area L/S/R", show leftArea ++ " / " ++ show straightArea ++ " / " ++ show rightArea)
+                       , ("Next moves L/S/R", show leftNextMoves ++ " / " ++ show straightNextMoves ++ " / " ++ show rightNextMoves)
+                       , ("Length", show (length (wormBody worm)))
+                       ],
+            Debug.debugQValues = Core.qValuesForState table state,
+            Debug.debugBestActions = Core.bestQActions table state
+        }
+  where
+    state = encodeState gameState worm
 
-    in
-        Debug.AgentDebugInfo
-            {
-                Debug.debugStateLines =
-                    describeState state
-                    ++
-                    [
-                        ( "Area L/S/R", show leftArea ++ " / " ++ show straightArea ++ " / " ++ show rightArea ),
-                        ( "Next moves L/S/R", show leftNextMoves ++ " / " ++ show straightNextMoves ++ " / " ++ show rightNextMoves),
-                        ( "Length", show (length (wormBody worm)) )
-                    ],
+    leftArea = reachableAreaAfterAction gameState worm TurnLeft
+    straightArea = reachableAreaAfterAction gameState worm GoStraight
+    rightArea = reachableAreaAfterAction gameState worm TurnRight
 
-                Debug.debugQValues = qValues,
-                Debug.debugBestActions = best
-            }
+    leftNextMoves = nextSafeMoveCountAfterAction gameState worm TurnLeft
+    straightNextMoves = nextSafeMoveCountAfterAction gameState worm GoStraight
+    rightNextMoves = nextSafeMoveCountAfterAction gameState worm TurnRight

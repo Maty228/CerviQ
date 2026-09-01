@@ -1,3 +1,17 @@
+{-|
+Module      : QLearning.V3
+Description : Third tabular Q-learning state and fallback policy for CerviQ.
+
+Version 3 replaces V2's separate danger and space fields with one
+'ActionQuality' for each candidate action. Each quality combines immediate
+collision safety, one-step opponent threats, future manoeuvrability, and
+reachable space. Relative food direction from V2 is retained.
+
+V3 also introduces a fallback policy that can use the encoded safety
+information when the Q-table has no suitable learned value. The generic
+Q-learning algorithm and table operations remain in "QLearning.Core".
+-}
+
 module QLearning.V3
     ( ActionQuality(..)
     , ForwardFoodDirection(..)
@@ -29,14 +43,24 @@ import qualified Data.Set as Set
 import qualified QLearning.Core as Core
 import qualified QLearning.Debug as Debug
 
+
 -- -----------------------------------------------------------------------------
 -- RL state representation
 -- -----------------------------------------------------------------------------
 
 -- | Overall quality of one candidate action.
 --
--- The quality combines immediate collision safety, possible opponent movement,
--- future manoeuvrability, and reachable space.
+-- The categories form a compact summary of several signals:
+--
+-- * 'Fatal' means the action is immediately unsafe.
+-- * 'Contested' means an opponent could move its head onto the destination
+--   during the same simultaneous turn.
+-- * 'DeadEnd' means the move is currently safe but leaves no ordinary safe
+--   continuation.
+-- * 'Threatened' means ordinary continuations exist, but none remain after
+--   applying the one-step opponent-threat approximation.
+-- * the remaining categories describe threat-aware reachable space, with
+--   @Forced@ variants indicating exactly one robust continuation.
 data ActionQuality
     = Fatal
     | Contested
@@ -53,7 +77,7 @@ data ActionQuality
     deriving (Show, Read, Eq, Ord)
 
 
--- | Forward position of the nearest food relative to the worm's orientation.
+-- | Position of the nearest food along the worm's forward/backward axis.
 data ForwardFoodDirection
     = FoodAhead
     | FoodSameForward
@@ -61,7 +85,7 @@ data ForwardFoodDirection
     deriving (Show, Read, Eq, Ord)
 
 
--- | Side position of the nearest food relative to the worm's orientation.
+-- | Position of the nearest food along the worm's left/right axis.
 data SideFoodDirection
     = FoodLeft
     | FoodSameSide
@@ -69,17 +93,17 @@ data SideFoodDirection
     deriving (Show, Read, Eq, Ord)
 
 
--- | Version-3 RL state.
+-- | Version-3 state used as the key of the tabular Q-table.
 --
--- Each candidate action is represented by one compact quality value combining
--- immediate safety, reachable space, manoeuvrability, and opponent threat.
+-- Compared with V2, the three separate danger values and three space values are
+-- compressed into one 'ActionQuality' per action. Relative food direction is
+-- retained unchanged.
 data RLState = RLState
-    {
-        qualityLeft :: ActionQuality,
-        qualityStraight :: ActionQuality,
-        qualityRight :: ActionQuality,
-        foodForward :: ForwardFoodDirection,
-        foodSideways :: SideFoodDirection
+    { qualityLeft :: ActionQuality
+    , qualityStraight :: ActionQuality
+    , qualityRight :: ActionQuality
+    , foodForward :: ForwardFoodDirection
+    , foodSideways :: SideFoodDirection
     }
     deriving (Show, Read, Eq, Ord)
 
@@ -88,10 +112,11 @@ data RLState = RLState
 -- Relative food direction
 -- -----------------------------------------------------------------------------
 
--- | Returns the food displacement in coordinates relative to worm orientation.
+-- | Converts the displacement to food into worm-relative coordinates.
 --
--- The first component is positive in front of the worm.
--- The second component is positive to the worm's right.
+-- The first returned component is positive in front of the worm and negative
+-- behind it. The second is positive to the worm's right and negative to its
+-- left.
 relativeFoodDeltas :: Worm -> Position -> (Int, Int)
 relativeFoodDeltas worm (foodX, foodY) =
     case wormDirection worm of
@@ -105,7 +130,7 @@ relativeFoodDeltas worm (foodX, foodY) =
     dy = foodY - headY
 
 
--- | Computes the forward relation of food to the worm.
+-- | Returns the nearest food's forward/backward relation to the worm.
 forwardFoodDirection :: Worm -> Position -> ForwardFoodDirection
 forwardFoodDirection worm food =
     case compare forwardDelta 0 of
@@ -116,7 +141,7 @@ forwardFoodDirection worm food =
     (forwardDelta, _) = relativeFoodDeltas worm food
 
 
--- | Computes the sideways relation of food to the worm.
+-- | Returns the nearest food's left/right relation to the worm.
 sideFoodDirection :: Worm -> Position -> SideFoodDirection
 sideFoodDirection worm food =
     case compare sideDelta 0 of
@@ -128,32 +153,27 @@ sideFoodDirection worm food =
 
 
 -- -----------------------------------------------------------------------------
--- Geometry helpers
+-- Hypothetical movement
 -- -----------------------------------------------------------------------------
 
--- | Returns all four neighbouring cells of a map position.
+-- | Returns all four orthogonal neighbours of a map position.
 neighbours :: Position -> [Position]
 neighbours (x, y) =
-    [
-        (x + 1, y),
-        (x - 1, y),
-        (x, y + 1),
-        (x, y - 1)
-    ]
+    [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
 
 
--- | Replaces one worm in a list with its updated version.
+-- | Replaces one worm in a complete worm list with a hypothetical version.
 replaceWorm :: Worm -> [Worm] -> [Worm]
 replaceWorm updatedWorm worms =
-    [
-        if wormId worm == wormId updatedWorm
-            then updatedWorm
-            else worm
-        | worm <- worms
+    [ if wormId worm == wormId updatedWorm then updatedWorm else worm
+    | worm <- worms
     ]
 
 
--- | Computes the hypothetical controlled worm after one action.
+-- | Simulates the controlled worm after one candidate action.
+--
+-- Growth is included when the candidate destination currently contains food.
+-- Other worms are left at their current positions.
 wormAfterAction :: GameState -> Worm -> Action -> Worm
 wormAfterAction state worm action =
     moveWormAfterAction grows action worm
@@ -161,251 +181,253 @@ wormAfterAction state worm action =
     nextHead = headAfterAction worm action
     grows = isFood (gameMap state) nextHead
 
+
 -- -----------------------------------------------------------------------------
--- Opponent threat prediction
+-- One-step opponent threats
 -- -----------------------------------------------------------------------------
 
--- | Returns all cells that living opponents could safely move their heads into
--- during the current simultaneous game step.
+-- | Returns every cell a living opponent could safely move its head into during
+-- the current simultaneous game turn.
+--
+-- This is deliberately only a one-step threat approximation. It does not know
+-- which action an opponent will actually choose and does not perform deeper
+-- adversarial search.
 possibleEnemyNextHeads :: GameState -> Worm -> Set.Set Position
 possibleEnemyNextHeads state controlled =
     Set.fromList
-        [
-            headAfterAction enemy action
-            | enemy <- gameWorms state, wormAlive enemy,
-            wormId enemy /= wormId controlled, action <- safeActions state enemy
+        [ headAfterAction enemy action
+        | enemy <- gameWorms state
+        , wormAlive enemy
+        , wormId enemy /= wormId controlled
+        , action <- safeActions state enemy
         ]
 
--- | Returns True if a cell blocks ordinary reachable-area exploration.
-blocksReachableArea
-    :: GameState
-    -> Worm
-    -> Position
-    -> Bool
+
+-- -----------------------------------------------------------------------------
+-- Reachable-space analysis
+-- -----------------------------------------------------------------------------
+
+-- | Returns whether a position blocks ordinary reachable-area exploration.
+--
+-- The controlled worm's head is removed from the occupied set so it can serve
+-- as the flood-fill starting position. All remaining living worm segments are
+-- treated as obstacles.
+blocksReachableArea :: GameState -> Worm -> Position -> Bool
 blocksReachableArea state worm position =
     isBlocked currentMap position
         || isPoison currentMap position
         || position `Set.member` occupiedWithoutOwnHead
   where
-    currentMap =
-        gameMap state
+    currentMap = gameMap state
+    aliveWorms = filter wormAlive (gameWorms state)
+    occupied = Set.fromList (occupiedPositions aliveWorms)
+    occupiedWithoutOwnHead = Set.delete (wormHead worm) occupied
 
-    aliveWorms =
-        filter wormAlive (gameWorms state)
 
-    occupied =
-        Set.fromList
-            (occupiedPositions aliveWorms)
-
-    occupiedWithoutOwnHead =
-        Set.delete
-            (wormHead worm)
-            occupied
-
--- | Counts ordinary cells reachable from the worm's current head.
+-- | Counts cells reachable from the worm's current head using ordinary
+-- flood-fill exploration.
 reachableArea :: GameState -> Worm -> Int
 reachableArea state worm =
     floodFill Set.empty [wormHead worm]
   where
     floodFill visited [] = Set.size visited
-
     floodFill visited (position : rest)
         | position `Set.member` visited = floodFill visited rest
         | blocksReachableArea state worm position = floodFill visited rest
-        | otherwise = floodFill (Set.insert position visited) (neighbours position ++ rest)
+        | otherwise =
+            floodFill
+                (Set.insert position visited)
+                (neighbours position ++ rest)
 
--- | Returns True if a cell blocks threat-aware reachable-area exploration.
+
+-- | Returns whether a position blocks threat-aware reachable-area exploration.
 --
--- In addition to ordinary obstacles, cells that an opponent may occupy on the
--- current simultaneous turn are treated as unavailable.
+-- In addition to ordinary obstacles, every cell in the supplied one-step
+-- opponent-threat set is considered unavailable.
 blocksThreatAwareArea :: Set.Set Position -> GameState -> Worm -> Position -> Bool
-blocksThreatAwareArea threats state worm position = blocksReachableArea state worm position || position `Set.member` threats
+blocksThreatAwareArea threats state worm position =
+    blocksReachableArea state worm position
+        || position `Set.member` threats
 
 
--- | Counts cells reachable while treating possible enemy head positions as
+-- | Counts cells reachable while treating one-step opponent threat positions as
 -- blocked.
 threatAwareReachableArea :: Set.Set Position -> GameState -> Worm -> Int
-threatAwareReachableArea threats state worm = floodFill Set.empty [wormHead worm]
+threatAwareReachableArea threats state worm =
+    floodFill Set.empty [wormHead worm]
   where
     floodFill visited [] = Set.size visited
-
     floodFill visited (position : rest)
         | position `Set.member` visited = floodFill visited rest
         | blocksThreatAwareArea threats state worm position = floodFill visited rest
-        | otherwise = floodFill (Set.insert position visited)(neighbours position ++ rest)
+        | otherwise =
+            floodFill
+                (Set.insert position visited)
+                (neighbours position ++ rest)
+
 
 -- -----------------------------------------------------------------------------
 -- Action analysis
 -- -----------------------------------------------------------------------------
 
--- | Internal diagnostics used to classify one candidate action.
+-- | Internal measurements used to classify one candidate action.
+--
+-- Only 'analysisQuality' becomes part of the learned V3 state. The remaining
+-- values are retained for diagnostics and for constructing that quality.
 data ActionAnalysis = ActionAnalysis
-    {
-        analysisQuality :: ActionQuality,
-        analysisRawArea :: Int,
-        analysisThreatAwareArea :: Int,
-        analysisRawNextMoves :: Int,
-        analysisRobustNextMoves :: Int
+    { analysisQuality :: ActionQuality
+    , analysisRawArea :: Int
+    , analysisThreatAwareArea :: Int
+    , analysisRawNextMoves :: Int
+    , analysisRobustNextMoves :: Int
     }
 
--- | Converts reachable area into an action quality.
+
+-- | Converts threat-aware reachable area into a V3 action-quality category.
 --
--- A forced action has exactly one threat-aware continuation available.
+-- The thresholds are relative to the moved worm's length. @Forced@ categories
+-- indicate that exactly one robust continuation remains.
 qualityFromArea :: Bool -> Worm -> Int -> ActionQuality
 qualityFromArea forced worm area
     | 2 * area <= wormLength =
-        if forced
-            then ForcedCritical
-            else Critical
-
+        if forced then ForcedCritical else Critical
     | area <= wormLength =
-        if forced
-            then ForcedRestricted
-            else Restricted
-
+        if forced then ForcedRestricted else Restricted
     | area <= 2 * wormLength =
-        if forced
-            then ForcedLimited
-            else Limited
-
+        if forced then ForcedLimited else Limited
     | otherwise =
-        if forced
-            then ForcedOpen
-            else Open
+        if forced then ForcedOpen else Open
   where
     wormLength = length (wormBody worm)
 
--- | Returns ordinary safe actions available after the candidate action.
-rawNextActions :: GameState -> Worm -> [Action]
-rawNextActions state worm = safeActions state worm
 
--- | Filters future actions whose destination may be occupied by an opponent.
+-- | Returns ordinary immediately safe actions from a hypothetical state.
+rawNextActions :: GameState -> Worm -> [Action]
+rawNextActions state worm =
+    safeActions state worm
+
+
+-- | Returns immediately safe future actions whose destinations are not part of
+-- the supplied one-step opponent-threat set.
+--
+-- The same threat set calculated for the current turn is reused as a
+-- conservative approximation; V3 does not simulate opponents another turn into
+-- the future.
 robustNextActions :: Set.Set Position -> GameState -> Worm -> [Action]
 robustNextActions threats state worm =
-    [
-        action
-        | action <- safeActions state worm,
-        headAfterAction worm action `Set.notMember` threats
+    [ action
+    | action <- safeActions state worm
+    , headAfterAction worm action `Set.notMember` threats
     ]
 
--- | Analyses one candidate action and assigns its version-3 quality.
+
+-- | Analyses one candidate action and assigns its V3 'ActionQuality'.
+--
+-- Classification proceeds from strongest failure conditions to increasingly
+-- coarse space information:
+--
+-- 1. immediately unsafe action -> 'Fatal';
+-- 2. destination reachable by an opponent this turn -> 'Contested';
+-- 3. no ordinary safe continuation -> 'DeadEnd';
+-- 4. no threat-aware continuation -> 'Threatened';
+-- 5. otherwise classify threat-aware reachable area, additionally recording
+--    whether exactly one robust continuation remains.
 analyzeAction :: GameState -> Worm -> Action -> ActionAnalysis
 analyzeAction state worm action
     | action `notElem` currentSafeActions =
-        ActionAnalysis
-            {
-                analysisQuality = Fatal,
-                analysisRawArea = 0,
-                analysisThreatAwareArea = 0,
-                analysisRawNextMoves = 0,
-                analysisRobustNextMoves = 0
-            }
+        emptyAnalysis Fatal
 
     | nextHead `Set.member` enemyThreats =
-        ActionAnalysis
-            {
-                analysisQuality = Contested,
-                analysisRawArea = 0,
-                analysisThreatAwareArea = 0,
-                analysisRawNextMoves = 0,
-                analysisRobustNextMoves = 0
-            }
+        emptyAnalysis Contested
 
-    | rawMoveCount == 0 = analysisWithQuality DeadEnd
-    | robustMoveCount == 0 = analysisWithQuality Threatened
+    | rawMoveCount == 0 =
+        analysisWithQuality DeadEnd
+
+    | robustMoveCount == 0 =
+        analysisWithQuality Threatened
+
     | otherwise =
-        analysisWithQuality
-            ( qualityFromArea
-                (robustMoveCount == 1)
-                movedWorm
-                safeArea
-            )
+        analysisWithQuality $
+            qualityFromArea (robustMoveCount == 1) movedWorm safeArea
 
   where
     currentSafeActions = safeActions state worm
     enemyThreats = possibleEnemyNextHeads state worm
     nextHead = headAfterAction worm action
+
     movedWorm = wormAfterAction state worm action
-    hypotheticalState = state { gameWorms = replaceWorm movedWorm (gameWorms state) }
+    hypotheticalState = state {gameWorms = replaceWorm movedWorm (gameWorms state)}
 
     rawArea = reachableArea hypotheticalState movedWorm
-
     safeArea = threatAwareReachableArea enemyThreats hypotheticalState movedWorm
 
-    rawMoveCount =
-        length
-            ( rawNextActions
-                hypotheticalState
-                movedWorm
-            )
+    rawMoveCount = length (rawNextActions hypotheticalState movedWorm)
+    robustMoveCount = length (robustNextActions enemyThreats hypotheticalState movedWorm)
 
-    robustMoveCount =
-        length
-            ( robustNextActions
-                enemyThreats
-                hypotheticalState
-                movedWorm
-            )
+    emptyAnalysis quality =
+        ActionAnalysis
+            { analysisQuality = quality
+            , analysisRawArea = 0
+            , analysisThreatAwareArea = 0
+            , analysisRawNextMoves = 0
+            , analysisRobustNextMoves = 0
+            }
 
     analysisWithQuality quality =
         ActionAnalysis
-            {
-                analysisQuality = quality,
-                analysisRawArea = rawArea,
-                analysisThreatAwareArea = safeArea,
-                analysisRawNextMoves = rawMoveCount,
-                analysisRobustNextMoves = robustMoveCount
+            { analysisQuality = quality
+            , analysisRawArea = rawArea
+            , analysisThreatAwareArea = safeArea
+            , analysisRawNextMoves = rawMoveCount
+            , analysisRobustNextMoves = robustMoveCount
             }
 
 -- -----------------------------------------------------------------------------
 -- State encoding
 -- -----------------------------------------------------------------------------
 
--- | Encodes the game using version-3 action qualities.
+-- | Encodes the current game situation from one worm's V3 perspective.
+--
+-- Each candidate action is independently reduced to one 'ActionQuality'.
+-- Relative food direction is retained from V2.
 encodeState :: GameState -> Worm -> RLState
 encodeState state worm =
     RLState
-        {
-            qualityLeft = analysisQuality (analyzeAction state worm TurnLeft),
-
-            qualityStraight = analysisQuality (analyzeAction state worm GoStraight),
-
-            qualityRight = analysisQuality (analyzeAction state worm TurnRight),
-
-            foodForward =
-                case nearest of
-                    Nothing -> FoodSameForward
-                    Just food -> forwardFoodDirection worm food,
-
-            foodSideways =
-                case nearest of
-                    Nothing -> FoodSameSide
-                    Just food -> sideFoodDirection worm food
+        { qualityLeft = analysisQuality (analyzeAction state worm TurnLeft)
+        , qualityStraight = analysisQuality (analyzeAction state worm GoStraight)
+        , qualityRight = analysisQuality (analyzeAction state worm TurnRight)
+        , foodForward =
+            case nearest of
+                Nothing -> FoodSameForward
+                Just food -> forwardFoodDirection worm food
+        , foodSideways =
+            case nearest of
+                Nothing -> FoodSameSide
+                Just food -> sideFoodDirection worm food
         }
   where
     nearest = nearestFood state worm
+
 
 -- -----------------------------------------------------------------------------
 -- Reward
 -- -----------------------------------------------------------------------------
 
--- | Computes the distance from the worm to the nearest food.
+-- | Returns Manhattan distance from the worm to the nearest food.
 distanceToNearestFood :: GameState -> Worm -> Maybe Int
 distanceToNearestFood state worm =
     fmap (distance (wormHead worm)) (nearestFood state worm)
 
 
--- | Computes shaping reward for moving closer to or farther from food.
+-- | Computes reward shaping for progress towards the nearest food.
+--
+-- Eating already has its own larger reward, so distance shaping is suppressed
+-- on transitions where food was consumed.
 foodDistanceReward :: GameState -> Worm -> GameState -> Worm -> Double
 foodDistanceReward beforeState beforeWorm afterState afterWorm
     | Core.wormFoodDelta beforeWorm afterWorm > 0 = 0
     | otherwise =
-        case
-            (
-                distanceToNearestFood beforeState beforeWorm,
-                distanceToNearestFood afterState afterWorm
-            )
-        of
+        case (distanceToNearestFood beforeState beforeWorm, distanceToNearestFood afterState afterWorm) of
             (Just beforeDistance, Just afterDistance)
                 | afterDistance < beforeDistance -> 2
                 | afterDistance > beforeDistance -> -2
@@ -413,75 +435,79 @@ foodDistanceReward beforeState beforeWorm afterState afterWorm
             _ -> 0
 
 
--- | Computes the version-3 reward for one transition.
+-- | Computes the V3 reward for one transition.
 --
--- Version 3 intentionally keeps exactly the same reward as version 2 so that
--- evaluation isolates the effect of the improved state representation.
+-- V3 intentionally keeps the same shaped reward as V2. This makes the V2/V3
+-- comparison primarily a comparison of state representations rather than a
+-- simultaneous change of both state and reward.
 rewardForStep :: GameState -> Worm -> GameState -> Worm -> Double
 rewardForStep beforeState beforeWorm afterState afterWorm =
     foodReward + killReward + deathPenalty + distanceReward + timePenalty
   where
     foodReward = 50 * fromIntegral (Core.wormFoodDelta beforeWorm afterWorm)
-
     killReward = 10 * fromIntegral (Core.wormKillDelta beforeWorm afterWorm)
-
-    deathPenalty =
-        if Core.wormDied beforeWorm afterWorm
-            then -100
-            else 0
-
+    deathPenalty = if Core.wormDied beforeWorm afterWorm then -100 else 0
     distanceReward = foodDistanceReward beforeState beforeWorm afterState afterWorm
-
     timePenalty = -1
 
--- | Returns True if an action quality is acceptable for normal action choice.
+
+-- -----------------------------------------------------------------------------
+-- V3 Q-learning specification
+-- -----------------------------------------------------------------------------
+
+-- | Complete version-specific specification passed to the shared Q-learning core.
+v3Spec :: Core.QLearningSpec RLState
+v3Spec =
+    Core.QLearningSpec
+        { Core.qlEncodeState = encodeState
+        , Core.qlRewardForStep = rewardForStep
+        }
+
+
+-- | Q-table whose keys use the V3 state representation.
+type QTable = Core.QTable RLState
+
+
+-- | Saves a V3 Q-table.
+saveQTable :: FilePath -> QTable -> IO ()
+saveQTable = Core.saveQTable
+
+
+-- | Loads a V3 Q-table.
+loadQTable :: FilePath -> IO QTable
+loadQTable = Core.loadQTable
+
+
+-- | Creates a greedy learned agent from a V3 Q-table.
+--
+-- Unseen state-action pairs are numerically treated as having Q-value zero by
+-- the generic core. 'qLearningAgentWithFallback' provides an alternative policy
+-- for cases where explicit learned values are unavailable.
+qLearningAgent :: QTable -> Agent
+qLearningAgent = Core.qLearningAgent v3Spec
+
+
+-- -----------------------------------------------------------------------------
+-- V3 fallback policy
+-- -----------------------------------------------------------------------------
+
+-- | Returns whether an action quality is acceptable for learned action choice.
+--
+-- Immediately fatal, contested, and dead-end moves are excluded whenever at
+-- least one better alternative exists. 'Threatened' remains acceptable because
+-- it is not immediately fatal and may still be the best available route.
 isAcceptableQuality :: ActionQuality -> Bool
 isAcceptableQuality Fatal = False
 isAcceptableQuality Contested = False
 isAcceptableQuality DeadEnd = False
 isAcceptableQuality _ = True
 
--- -----------------------------------------------------------------------------
--- V3 Q-learning specification
--- -----------------------------------------------------------------------------
 
--- | Complete Q-learning specification of version 3.
-v3Spec :: Core.QLearningSpec RLState
-v3Spec =
-    Core.QLearningSpec
-        {
-            Core.qlEncodeState = encodeState,
-            Core.qlRewardForStep = rewardForStep
-        }
-
-
--- | Q-table used by Q-learning version 3.
-type QTable = Core.QTable RLState
-
-
--- | Saves a version-3 Q-table.
-saveQTable :: FilePath -> QTable -> IO ()
-saveQTable = Core.saveQTable
-
-
--- | Loads a version-3 Q-table.
-loadQTable :: FilePath -> IO QTable
-loadQTable = Core.loadQTable
-
-
--- | Creates the greedy version-3 learned agent.
-qLearningAgent :: QTable -> Agent
-qLearningAgent = Core.qLearningAgent v3Spec
-
-
--- -----------------------------------------------------------------------------
--- V3 Agent with fallback for dangerous actions
--- -----------------------------------------------------------------------------
-
-
--- | Assigns a fallback preference to an action quality.
+-- | Assigns an ordering score to V3 action qualities for fallback decisions.
 --
--- Higher values represent safer and more desirable action qualities.
+-- Higher scores represent more desirable actions. Within the same approximate
+-- space category, a non-forced action is preferred because it leaves more than
+-- one robust continuation.
 qualityScore :: ActionQuality -> Int
 qualityScore Fatal = 0
 qualityScore Contested = 1
@@ -497,56 +523,56 @@ qualityScore ForcedOpen = 10
 qualityScore Open = 11
 
 
--- | Returns the encoded action quality corresponding to an action.
+-- | Returns the encoded quality corresponding to one relative action.
 qualityForAction :: RLState -> Action -> ActionQuality
-qualityForAction state TurnLeft =
-    qualityLeft state
+qualityForAction state TurnLeft = qualityLeft state
+qualityForAction state GoStraight = qualityStraight state
+qualityForAction state TurnRight = qualityRight state
 
-qualityForAction state GoStraight =
-    qualityStraight state
 
-qualityForAction state TurnRight =
-    qualityRight state
-
--- | Chooses the safest action according to version-3 state information.
+-- | Chooses an action solely from V3 state-quality information.
+--
+-- This is used when the Q-table contains no learned value for a suitable
+-- candidate action. Ties between equally ranked qualities are resolved randomly.
 fallbackAction :: RLState -> IO Action
 fallbackAction state =
-    randomChoice bestActions
+    randomChoice bestActions'
   where
     actionScores =
-        [
-            (action, qualityScore (qualityForAction state action))
-            | action <- allActions
+        [ (action, qualityScore (qualityForAction state action))
+        | action <- allActions
         ]
 
-    bestScore =
-        maximum (map snd actionScores)
+    bestScore = maximum (map snd actionScores)
+    bestActions' = [action | (action, score) <- actionScores, score == bestScore]
 
-    bestActions =
-        [
-            action
-            | (action, score) <- actionScores,
-              score == bestScore
-        ]
 
--- | Creates a V3 agent using learned Q-values with an action-quality fallback.
+-- | Creates a V3 agent that combines learned Q-values with a safety fallback.
+--
+-- The policy works in three stages:
+--
+-- 1. discard 'Fatal', 'Contested', and 'DeadEnd' actions when at least one
+--    acceptable alternative exists;
+-- 2. among the remaining candidates, consider only actions explicitly present
+--    in the Q-table;
+-- 3. if no suitable learned action exists, choose using 'fallbackAction'.
+--
+-- Checking table membership with 'Core.hasQValue' is important because unseen
+-- actions and actions explicitly learned to value zero both return numeric
+-- Q-value @0@. Without this distinction, an unseen action could incorrectly
+-- appear better than a learned action with a negative value.
 qLearningAgentWithFallback :: QTable -> Agent
 qLearningAgentWithFallback table gameState worm =
-    case learnedAcceptableActions of
-        [] ->
-            fallbackAction state
-
-        actions ->
-            chooseBestLearnedAction actions
+    case learnedCandidateActions of
+        [] -> fallbackAction state
+        actions -> chooseBestLearnedAction actions
   where
-    state =
-        encodeState gameState worm
+    state = encodeState gameState worm
 
     acceptableActions =
-        [
-            action
-            | action <- allActions,
-              isAcceptableQuality (qualityForAction state action)
+        [ action
+        | action <- allActions
+        , isAcceptableQuality (qualityForAction state action)
         ]
 
     candidateActions =
@@ -554,69 +580,60 @@ qLearningAgentWithFallback table gameState worm =
             then allActions
             else acceptableActions
 
-    learnedAcceptableActions =
-        [
-            action
-            | action <- candidateActions,
-              Core.hasQValue table state action
+    learnedCandidateActions =
+        [ action
+        | action <- candidateActions
+        , Core.hasQValue table state action
         ]
 
     chooseBestLearnedAction actions =
-        randomChoice bestActions
+        randomChoice bestActions'
       where
-        actionValues =
-            [
-                (action, Core.qValue table state action)
-                | action <- actions
-            ]
+        actionValues = [(action, Core.qValue table state action) | action <- actions]
+        bestValue = maximum (map snd actionValues)
+        bestActions' = [action | (action, value) <- actionValues, value == bestValue]
 
-        bestValue =
-            maximum (map snd actionValues)
-
-        bestActions =
-            [
-                action
-                | (action, value) <- actionValues,
-                  value == bestValue
-            ]
 
 -- -----------------------------------------------------------------------------
 -- V3 debugging
 -- -----------------------------------------------------------------------------
 
--- | Converts the encoded version-3 state into human-readable values.
+-- | Converts a V3 encoded state into human-readable diagnostic values.
 describeState :: RLState -> [(String, String)]
 describeState state =
-    [
-        ( "Quality L/S/R", show (qualityLeft state) ++ " / " ++ show (qualityStraight state) ++ " / " ++ show (qualityRight state) ),
-        ( "Food forward", show (foodForward state) ),
-        ( "Food sideways", show (foodSideways state) )
+    [ ("Quality L/S/R", show (qualityLeft state) ++ " / " ++ show (qualityStraight state) ++ " / " ++ show (qualityRight state))
+    , ("Food forward", show (foodForward state))
+    , ("Food sideways", show (foodSideways state))
     ]
 
--- | Creates detailed debugging information for a version-3 learned agent.
+
+-- | Creates detailed version-independent GUI diagnostics for a V3 agent.
+--
+-- In addition to the encoded state and Q-values, the debugger exposes the
+-- underlying measurements used to construct each 'ActionQuality'. These raw
+-- values are diagnostic only and are not additional fields of the learned
+-- state.
 v3DebugProvider :: QTable -> Debug.AgentDebugProvider
 v3DebugProvider table gameState worm =
-    let
-        state = encodeState gameState worm
-        leftAnalysis = analyzeAction gameState worm TurnLeft
-        straightAnalysis = analyzeAction gameState worm GoStraight
-        rightAnalysis = analyzeAction gameState worm TurnRight
-        showTriple selector = show (selector leftAnalysis) ++ " / " ++ show (selector straightAnalysis) ++ " / " ++ show (selector rightAnalysis)
+    Debug.AgentDebugInfo
+        { Debug.debugStateLines =
+            describeState state
+                ++ [ ("Raw area L/S/R", showTriple analysisRawArea)
+                   , ("Safe area L/S/R", showTriple analysisThreatAwareArea)
+                   , ("Raw moves L/S/R", showTriple analysisRawNextMoves)
+                   , ("Robust moves L/S/R", showTriple analysisRobustNextMoves)
+                   , ("Length", show (length (wormBody worm)))
+                   ]
+        , Debug.debugQValues = Core.qValuesForState table state
+        , Debug.debugBestActions = Core.bestQActions table state
+        }
+  where
+    state = encodeState gameState worm
+    leftAnalysis = analyzeAction gameState worm TurnLeft
+    straightAnalysis = analyzeAction gameState worm GoStraight
+    rightAnalysis = analyzeAction gameState worm TurnRight
 
-    in
-        Debug.AgentDebugInfo
-            {
-                Debug.debugStateLines =
-                    describeState state
-                    ++
-                    [
-                        ( "Raw area L/S/R", showTriple analysisRawArea ),
-                        ( "Safe area L/S/R", showTriple analysisThreatAwareArea ),
-                        ( "Raw moves L/S/R", showTriple analysisRawNextMoves ),
-                        ( "Robust moves L/S/R", showTriple analysisRobustNextMoves ),
-                        ( "Length", show (length (wormBody worm)) )
-                    ],
-
-                Debug.debugQValues = Core.qValuesForState table state,
-                Debug.debugBestActions = Core.bestQActions table state
-            }
+    showTriple selector =
+        show (selector leftAnalysis)
+            ++ " / " ++ show (selector straightAnalysis)
+            ++ " / " ++ show (selector rightAnalysis)

@@ -31,7 +31,6 @@ common cerviq-common
     Scenario
     Scenarios
     Evaluation
-    QLearning
     QLearning.Core
     QLearning.Debug
     QLearning.V1
