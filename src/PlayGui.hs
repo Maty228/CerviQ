@@ -1,3 +1,16 @@
+{-|
+Module      : PlayGui
+Description : Human-versus-agent gameplay and graphical presentation.
+
+This module implements the playable CerviQ mode. It stores the pending human
+action, obtains the opponent action through the generic controller interface,
+advances both worms simultaneously through the normal game engine, and handles
+Gloss keyboard input, timing, game results, rendering, and restart behaviour.
+
+Human arrow keys represent absolute map directions. They are converted to the
+relative 'Action' representation used by the game engine through
+'Movement.directionToAction'.
+-}
 module PlayGui where
 
 import Config (maxFoodCount)
@@ -22,6 +35,7 @@ import Gui
     , shortenText
     , uiAccentColor
     , uiMutedColor
+    , uiBorderColor
     )
 import Viewport
 import Types
@@ -30,12 +44,14 @@ import Graphics.Gloss
 import Graphics.Gloss.Interface.IO.Game
 import Text.Printf (printf)
 
+import Movement (directionToAction)
+
 
 -- -----------------------------------------------------------------------------
 -- Play configuration
 -- -----------------------------------------------------------------------------
 
--- | initial number of game ticks simulated per second.
+-- | Initial number of game ticks simulated per second.
 initialPlaySpeed :: Float
 initialPlaySpeed = 3
 
@@ -129,20 +145,6 @@ resultForState humanId opponentId state =
         (False, True) -> PlayerLost
         (False, False) -> PlayDraw
 
-
--- | Returns a human-readable name of a relative movement action.
-actionName :: Action -> String
-actionName TurnLeft = "Turn left"
-actionName GoStraight = "Straight"
-actionName TurnRight = "Turn right"
-
-
--- | Returns a human-readable name of the current game result.
-resultName :: PlayResult -> String
-resultName PlayRunning = "Playing"
-resultName PlayerWon = "You win!"
-resultName PlayerLost = "You died"
-resultName PlayDraw = "Draw"
 
 
 -- -----------------------------------------------------------------------------
@@ -238,30 +240,6 @@ queueHumanAction action world
             }
 
 
--- | Converts a requested global direction into a relative worm action.
---
--- Reversing directly into the opposite direction is not allowed.
-actionForDirection :: Direction -> Direction -> Maybe Action
-actionForDirection North North = Just GoStraight
-actionForDirection North East = Just TurnRight
-actionForDirection North West = Just TurnLeft
-actionForDirection North South = Nothing
-
-actionForDirection East East = Just GoStraight
-actionForDirection East South = Just TurnRight
-actionForDirection East North = Just TurnLeft
-actionForDirection East West = Nothing
-
-actionForDirection South South = Just GoStraight
-actionForDirection South West = Just TurnRight
-actionForDirection South East = Just TurnLeft
-actionForDirection South North = Nothing
-
-actionForDirection West West = Just GoStraight
-actionForDirection West North = Just TurnRight
-actionForDirection West South = Just TurnLeft
-actionForDirection West East = Nothing
-
 -- | Queues a global direction for the human worm if the requested turn is
 -- possible from its current direction.
 queueHumanDirection :: Direction -> PlayWorld -> PlayWorld
@@ -271,7 +249,7 @@ queueHumanDirection requestedDirection world =
             world
 
         Just worm ->
-            case actionForDirection (wormDirection worm) requestedDirection of
+            case directionToAction (wormDirection worm) requestedDirection of
                 Nothing ->
                     world
 
@@ -366,6 +344,11 @@ updatePlayWorld deltaTime world
         1 / playSpeed world
 
 
+-- -----------------------------------------------------------------------------
+-- Camera helpers
+-- -----------------------------------------------------------------------------
+
+
 -- | Returns the map position the play-mode camera should follow.
 humanFocusPosition :: PlayWorld -> Position
 humanFocusPosition world =
@@ -395,8 +378,9 @@ humanFocusPosition world =
         )
 
 -- -----------------------------------------------------------------------------
--- Drawing
+-- Board drawing
 -- -----------------------------------------------------------------------------
+
 
 -- | Returns the display color assigned to a worm in play mode.
 playWormColor :: PlayWorld -> Worm -> Color
@@ -458,6 +442,10 @@ drawPlayGameState world
             currentMap
             (humanFocusPosition world)
 
+
+-- -----------------------------------------------------------------------------
+-- Play HUD
+-- -----------------------------------------------------------------------------
 
 -- | Draws one worm's basic gameplay statistics.
 drawPlayWormStats :: Float -> String -> Color -> Maybe Worm -> Picture
@@ -595,9 +583,12 @@ drawPlayGameOverOverlay world
             PlayDraw -> -55
             PlayRunning -> 0
 
-    uiBorder =
-        makeColorI 130 136 148 255
+    uiBorder = uiBorderColor
 
+
+-- -----------------------------------------------------------------------------
+-- Viewport indicators
+-- -----------------------------------------------------------------------------
 
 -- | Draws off-screen navigation indicators relative to the human-controlled
 -- worm.

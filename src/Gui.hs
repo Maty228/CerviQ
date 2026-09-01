@@ -1,7 +1,19 @@
+{-|
+Module      : Gui
+Description : Watch Agents simulation, graphical board rendering, and debug HUD.
+
+This module implements the interactive Watch Agents mode. It maintains a
+history of simulation snapshots, obtains actions from configured controllers,
+supports pausing and stepping through the simulation, and displays both general
+game information and version-independent Q-learning diagnostics.
+
+The module also contains graphical helpers shared with the application menus
+and 'PlayGui', including board rendering, viewport indicators, panels, text,
+and common HUD components.
+-}
 module Gui where
 
 import Maps ( tileAt, allMapPositions, foodPositions )
-import Movement ()
 import Types
 import Config ( maxFoodCount )
 import Controller ( collectActions )
@@ -61,20 +73,6 @@ boardOffsetX = -250
 -- | Left edge of the debug panel.
 panelLeftX :: Float
 panelLeftX = 210
-
-
--- | Top position of the debug panel.
-panelTopY :: Float
-panelTopY = 330
-
--- | Vertical position of the simulator status.
-statusY :: Float
-statusY = 330
-
-
--- | Vertical position of the agent legend.
-legendTopY :: Float
-legendTopY = 275
 
 
 -- | Gloss window used by the game visualizer.
@@ -158,6 +156,10 @@ initialGuiWorld agents initialState =
             guiSpeed = 3,
             guiAccumulator = 0       
         }
+
+-- -----------------------------------------------------------------------------
+-- Simulation history
+-- -----------------------------------------------------------------------------
 
 -- | Returns True if no worm is still alive.
 guiGameFinished :: GameState -> Bool
@@ -250,6 +252,20 @@ restartGui world =
             guiAccumulator = 0
         }
 
+-- | Returns the last action performed by the given worm.
+snapshotActionFor :: Int -> GuiSnapshot -> Maybe Action
+snapshotActionFor wormId' snapshot =
+    lookup wormId' (snapshotActions snapshot)
+
+-- | Returns the last reward obtained by the given worm.
+snapshotRewardFor :: Int -> GuiSnapshot -> Maybe Double
+snapshotRewardFor wormId' snapshot =
+    lookup wormId' (snapshotRewards snapshot)
+
+-- -----------------------------------------------------------------------------
+-- Input handling
+-- -----------------------------------------------------------------------------
+
 -- | Handles keyboard input for the GUI debugger.
 handleGuiEvent :: Event -> GuiWorld -> IO GuiWorld
 handleGuiEvent (EventKey (SpecialKey KeySpace) Down _ _) world =
@@ -329,6 +345,9 @@ toggleWatchHudMode :: WatchHudMode -> WatchHudMode
 toggleWatchHudMode WatchOverviewMode = WatchDebugMode
 toggleWatchHudMode WatchDebugMode = WatchOverviewMode
 
+-- -----------------------------------------------------------------------------
+-- Automatic updating
+-- -----------------------------------------------------------------------------
 
 -- | Updates the automatic game simulation according to elapsed real time.
 updateGuiWorld :: Float -> GuiWorld -> IO GuiWorld
@@ -358,34 +377,9 @@ updateGuiWorld deltaTime world
     accumulatedTime = guiAccumulator world + deltaTime
     tickInterval = 1 / guiSpeed world
 
--- | Draws the complete interactive debugger.
-drawGuiWorld :: GuiWorld -> IO Picture
-drawGuiWorld world =
-    pure
-        ( pictures
-            [
-                translate boardOffsetX 0 $
-                    drawGameStateForGui world,
-
-                drawWatchHud world
-            ]
-        )
-
-
--- | Starts the interactive Gloss game debugger.
-runGui
-    :: [GuiAgent]
-    -> GameState
-    -> IO ()
-runGui agents initialState =
-    playIO
-        guiDisplay
-        black
-        60
-        (initialGuiWorld agents initialState)
-        drawGuiWorld
-        handleGuiEvent
-        updateGuiWorld
+-- -----------------------------------------------------------------------------
+-- Agent helpers
+-- -----------------------------------------------------------------------------
 
 -- | Computes the configured reward for one GUI agent across a game transition.
 rewardForAgent :: GuiAgent -> GameState -> GameState -> Maybe Double
@@ -393,12 +387,7 @@ rewardForAgent agent beforeState afterState = do
     rewardFunction <- guiAgentRewardFunction agent
     beforeWorm <- Core.controlledWorm (guiAgentWormId agent) beforeState
     afterWorm <- Core.controlledWorm (guiAgentWormId agent) afterState
-    pure ( rewardFunction beforeState beforeWorm afterState afterWorm )
-
-
--- -----------------------------------------------------------------------------
--- Agent helpers
--- -----------------------------------------------------------------------------
+    pure (rewardFunction beforeState beforeWorm afterState afterWorm)
 
 -- | Converts GUI agent descriptions to the controller list used by the game.
 guiControllers :: [GuiAgent] -> [(Int, Controller)]
@@ -422,7 +411,7 @@ wormColor agents worm =
 
 
 -- -----------------------------------------------------------------------------
--- Coordinate conversion
+-- Board rendering
 -- -----------------------------------------------------------------------------
 
 -- | Converts a game-map position to Gloss coordinates.
@@ -498,16 +487,6 @@ drawMapViewport viewport gameMap' =
             | position <- viewportPositions viewport
         ]
 
--- | Draws one segment of a worm.
-drawWormSegment :: GameMap -> Color -> Position -> Picture
-drawWormSegment gameMap' segmentColor position =
-    let
-        (screenX, screenY) = mapPositionToScreen gameMap' position
-        cellSize = cellSizeForMap gameMap'
-    in
-        translate screenX screenY $
-            color segmentColor $
-                circleSolid (cellSize * 0.35)
 
 -- | Draws one living worm using its assigned GUI color.
 drawColoredWorm :: GameMap -> Color -> Worm -> Picture
@@ -595,6 +574,38 @@ drawColoredWormViewport viewport wormColor' worm
                                 )
                                 visibleBody
                         )
+
+-- | Draws the complete game state with agent-specific worm colors.
+--
+-- Small maps are shown completely. Large maps use a viewport centered on the
+-- currently selected worm.
+drawGameStateForGui :: GuiWorld -> Picture
+drawGameStateForGui world
+    | usesViewport currentMap =
+        pictures
+            [ drawMapViewport viewport currentMap,
+              pictures
+                [ drawColoredWormViewport viewport (wormColor (guiAgents world) worm) worm
+                  | worm <- gameWorms currentState
+                ],
+              drawGuiViewportIndicators world viewport currentState focusPosition
+            ]
+    | otherwise =
+        pictures
+            [ drawMap currentMap,
+              pictures
+                [ drawColoredWorm currentMap (wormColor (guiAgents world) worm) worm
+                  | worm <- gameWorms currentState
+                ]
+            ]
+  where
+    currentState = snapshotGameState (guiCurrent world)
+    currentMap = gameMap currentState
+    focusPosition =
+        case selectedWormPosition world currentState of
+            Just position -> position
+            Nothing -> mapCenterPosition currentMap
+    viewport = viewportAround currentMap focusPosition
 
 
 -- -----------------------------------------------------------------------------
@@ -720,61 +731,9 @@ mapCenterPosition gameMap' =
         mapHeight gameMap' `div` 2
     )
 
--- | Draws the complete game state with agent-specific worm colors.
---
--- Small maps are shown completely. Large maps use a viewport centered on the
--- currently selected worm.
-drawGameStateForGui :: GuiWorld -> Picture
-drawGameStateForGui world
-    | usesViewport currentMap =
-        pictures
-            [
-                drawMapViewport viewport currentMap,
-
-                pictures
-                    [
-                        drawColoredWormViewport
-                            viewport
-                            (wormColor (guiAgents world) worm)
-                            worm
-                        | worm <- gameWorms currentState
-                    ],
-
-                drawGuiViewportIndicators
-                    world
-                    viewport
-                    currentState
-                    focusPosition
-            ]
-
-    | otherwise =
-        pictures
-            [
-                drawMap currentMap,
-                pictures
-                    [
-                        drawColoredWorm
-                            currentMap
-                            (wormColor (guiAgents world) worm)
-                            worm
-                        | worm <- gameWorms currentState
-                    ]
-            ]
-  where
-    currentState =
-        snapshotGameState (guiCurrent world)
-
-    currentMap =
-        gameMap currentState
-
-    focusPosition =
-        case selectedWormPosition world currentState of
-            Just position -> position
-            Nothing -> mapCenterPosition currentMap
-
-    viewport =
-        viewportAround currentMap focusPosition
-
+-- -----------------------------------------------------------------------------
+-- Shared UI drawing helpers
+-- -----------------------------------------------------------------------------
 
 -- | Draws one scaled line of text.
 drawGuiText :: Float -> Float -> Float -> Color -> String -> Picture
@@ -783,11 +742,6 @@ drawGuiText x y textSize textColor contents =
         scale textSize textSize $
             color textColor $
                 text contents
-
-
--- -----------------------------------------------------------------------------
--- Shared UI drawing helpers
--- -----------------------------------------------------------------------------
 
 -- | Joins short UI labels without depending on extra library helpers.
 joinWith :: String -> [String] -> String
@@ -953,44 +907,10 @@ drawFooter :: Float -> Float -> [String] -> Picture
 drawFooter left y hints =
     drawGuiText left y 0.085 uiMutedColor (joinWith "     " hints)
 
--- | Draws the agent color legend.
-drawAgentLegend :: GuiWorld -> Picture
-drawAgentLegend world = pictures ( header : zipWith drawAgent [0 ..] (guiAgents world) )
-  where
-    header = drawGuiText panelLeftX legendTopY 0.16 white "Agents"
 
-    drawAgent :: Int -> GuiAgent -> Picture
-    drawAgent index agent =
-        let y = legendTopY - 35 - fromIntegral index * 28
-
-            selected = guiSelectedWormId world == guiAgentWormId agent
-
-            label =
-                (if selected then "> " else "  ")
-                    ++ "Worm "
-                    ++ show (guiAgentWormId agent)
-                    ++ " - "
-                    ++ guiAgentName agent
-        in
-            pictures
-                [
-                    translate (panelLeftX + 8) (y + 7) $
-                        color (guiAgentColor agent) $
-                            circleSolid 7,
-
-                    drawGuiText (panelLeftX + 25) y 0.11 white label
-                ]
-
--- | Returns the last action performed by the given worm.
-snapshotActionFor :: Int -> GuiSnapshot -> Maybe Action
-snapshotActionFor wormId' snapshot =
-    lookup wormId' (snapshotActions snapshot)
-
-
--- | Returns the last reward obtained by the given worm.
-snapshotRewardFor :: Int -> GuiSnapshot -> Maybe Double
-snapshotRewardFor wormId' snapshot =
-    lookup wormId' (snapshotRewards snapshot)
+-- -----------------------------------------------------------------------------
+-- Watch HUD
+-- -----------------------------------------------------------------------------
 
 
 -- | Draws the complete right-side Watch Agents HUD.
@@ -1167,64 +1087,6 @@ drawWatchDebug world =
         ]
 
 
--- | Draws basic statistics for the currently selected worm.
-drawSelectedWormStats :: GuiWorld -> Picture
-drawSelectedWormStats world =
-    case Core.controlledWorm selectedId currentState of
-        Nothing ->
-            drawGuiText panelLeftX 140 0.12 red "Selected worm not found"
-
-        Just worm ->
-            pictures
-                [
-                    drawGuiText panelLeftX 160 0.15 white title,
-                    drawGuiText panelLeftX 130 0.10 white statusLine,
-                    drawGuiText panelLeftX 108 0.10 white lengthLine,
-                    drawGuiText panelLeftX 86 0.10 white ageLine,
-                    drawGuiText panelLeftX 64 0.10 white foodLine,
-                    drawGuiText panelLeftX 42 0.10 white killsLine,
-                    drawGuiText panelLeftX 20 0.10 white actionLine,
-                    drawGuiText panelLeftX (-2) 0.10 white rewardLine
-                ]
-          where
-            stats = wormStats worm
-
-            title = "Selected: Worm " ++ show selectedId
-
-            statusLine = "Status: " ++ if wormAlive worm then "alive" else "dead"
-
-            lengthLine = "Length: " ++ show (length (wormBody worm))
-
-            ageLine = "Age: " ++ show (age stats)
-
-            foodLine = "Food: " ++ show (foodEaten stats)
-
-            killsLine = "Kills: " ++ show (kills stats)
-
-            actionLine =
-                "Last action: "
-                    ++ maybe
-                        "-"
-                        show
-                        (snapshotActionFor selectedId snapshot)
-
-            rewardLine =
-                "Last reward: "
-                    ++ maybe
-                        "-"
-                        (printf "%.2f")
-                        (snapshotRewardFor selectedId snapshot)
-
-  where
-    selectedId =
-        guiSelectedWormId world
-
-    snapshot =
-        guiCurrent world
-
-    currentState =
-        snapshotGameState snapshot
-
 
 -- | Draws version-independent debug information for the selected agent.
 drawAgentDebug :: GuiWorld -> Picture
@@ -1306,25 +1168,11 @@ drawDebugInfo debugInfo =
 
             Nothing -> 0
 
--- | Draws current simulator status and controls.
-drawGuiStatus :: GuiWorld -> Picture
-drawGuiStatus world =
-    pictures
-        [
-            drawGuiText panelLeftX 300 0.11 white ("Tick: " ++ show (gameTick currentState)),
-            drawGuiText (panelLeftX + 120) statusY 0.11 statusColor statusText,
-            drawGuiText (panelLeftX + 235) 300 0.11 white ("Speed: " ++ printf "%.2fx" (guiSpeed world)),
-            drawGuiText panelLeftX (-335) 0.085 (greyN 0.7) "SPACE play/pause | arrows step | R restart | +/- speed | 1-9 select/focus"
-        ]
-  where
-    currentState = snapshotGameState (guiCurrent world)
+-- -----------------------------------------------------------------------------
+-- Top-level drawing
+-- -----------------------------------------------------------------------------
 
-    statusText =
-        if guiPaused world
-            then "PAUSED"
-            else "PLAYING"
-
-    statusColor =
-        if guiPaused world
-            then yellow
-            else green
+-- | Draws the complete interactive debugger.
+drawGuiWorld :: GuiWorld -> IO Picture
+drawGuiWorld world =
+    pure $ pictures [translate boardOffsetX 0 (drawGameStateForGui world), drawWatchHud world]
