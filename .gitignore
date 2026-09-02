@@ -42,3 +42,6 @@ data/models/*_stats.txt
 
 # Temporary models produced by configurable/demo training
 data/models/demo_*
+
+# Evaluation reports
+outputs/
