@@ -39,3 +39,6 @@ cabal-dev/
 
 # Raw training statistics
 data/models/*_stats.txt
+
+# Temporary models produced by configurable/demo training
+data/models/demo_*

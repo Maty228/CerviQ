@@ -11,43 +11,11 @@ category:            Game
 build-type:          Simple
 
 extra-source-files:  README.md
+                     docs/experiments.md
 
 
-common cerviq-common
-  other-modules:
-    App
-    Types
-    Movement
-    Collision
-    Controller
-    Game
-    Agent
-    AgentRegistry
-    Config
-    Maps
-    Scenario
-    Scenarios
-    Evaluation
-    QLearning.Core
-    QLearning.Debug
-    QLearning.V1
-    QLearning.V2
-    QLearning.V3
-    QLearning.V4
-    Training
-    TrainingEnvironment
-    PlayGui
-    Gui
-    Viewport
-
+common cerviq-options
   default-language:    Haskell2010
-
-  build-depends:
-    base >= 4.7 && < 5,
-    containers,
-    random,
-    gloss,
-    time ^>=1.12.2
 
   ghc-options:         -Wall
                        -Wcompat
@@ -62,17 +30,102 @@ common cerviq-common
                        -O2
 
 
-executable cerviQ
-  import:              cerviq-common
+library
+  import:              cerviq-options
+
   hs-source-dirs:      src
+
+  exposed-modules:
+      Agent
+      AgentRegistry
+      App
+      Collision
+      Config
+      Controller
+      Evaluation
+      Game
+      Gui
+      Maps
+      Movement
+      PlayGui
+      Scenario
+      Scenarios
+      Training
+      TrainingEnvironment
+      Types
+      Viewport
+      QLearning.Core
+      QLearning.Debug
+      QLearning.V1
+      QLearning.V2
+      QLearning.V3
+      QLearning.V4
+
+  build-depends:
+      base >= 4.7 && < 5,
+      containers,
+      random,
+      gloss,
+      time ^>=1.12.2
+
+
+executable cerviQ
+  import:              cerviq-options
+
+  hs-source-dirs:      app
   main-is:             Main.hs
+
+  build-depends:
+      base >= 4.7 && < 5,
+      cerviQ
 
 
 executable cerviq-train-v4
-  import:              cerviq-common
+  import:              cerviq-options
+
   hs-source-dirs:      app
-                       src
   main-is:             TrainV4.hs
+
+  build-depends:
+      base >= 4.7 && < 5,
+      cerviQ
+
+
+executable cerviq-train
+  import:              cerviq-options
+
+  hs-source-dirs:      app
+  main-is:             TrainModel.hs
+
+  build-depends:
+      base >= 4.7 && < 5,
+      cerviQ,
+      time ^>=1.12.2
+
+
+executable cerviq-evaluate
+  import:              cerviq-options
+
+  hs-source-dirs:      app
+  main-is:             EvaluateModels.hs
+
+  build-depends:
+      base >= 4.7 && < 5,
+      cerviQ
+
+
+test-suite cerviq-tests
+  import:              cerviq-options
+
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+
+  build-depends:
+      base >= 4.7 && < 5,
+      cerviQ,
+      tasty,
+      tasty-hunit
 
 
 source-repository head
