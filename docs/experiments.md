@@ -9,6 +9,12 @@ The tools use process-global randomness and have no seed option. Commands with t
 same arguments repeat the methodology, but not necessarily the exact episode
 sequence or numerical result.
 
+The quantitative tables below were derived from 41 aggregate reports retained
+locally under `outputs/evaluation/` when this document was prepared. The
+repository ignores `outputs/`, so those raw reports are not distributed by Git.
+The tables document the recorded runs, but a clean clone cannot independently
+audit their source values unless the reports are archived separately.
+
 ## Build
 
 From the repository root:
@@ -70,7 +76,7 @@ stack run cerviq-train -- --help
 ```
 
 The configurable trainer is primarily intended for shorter experiments and
-reproducible demonstrations. The dedicated `cerviq-train-v4` command remains the
+configurable demonstrations. The dedicated `cerviq-train-v4` command remains the
 record of the final 30,000-episode V4 recipe.
 
 ## Pairwise evaluation
@@ -99,7 +105,7 @@ fallback policy.
 
 ### Evaluation methodology
 
-Every stored benchmark in the main evaluation set uses the same setup:
+Every benchmark in the local main evaluation set uses the same setup:
 
 1. construct `Scenario.scenarioInitialState`, containing the two default worms;
 2. randomly keep or swap the two starting bodies and directions;
@@ -123,7 +129,7 @@ When a single mean is shown across Arena, Cave, and Corridors, it is an
 **unweighted macro-average across the three scenarios**. Large Cave is kept
 separate because it was not part of the training distribution.
 
-The stored reports contain aggregate statistics rather than per-episode traces.
+The local reports contain aggregate statistics rather than per-episode traces.
 The comparisons below are therefore descriptive; no significance claim is made
 for small differences between stochastic runs.
 
@@ -357,9 +363,10 @@ These conclusions are descriptive rather than claims of statistical
 significance because the evaluator stores aggregate reports and uses unseeded
 randomness.
 
-## Stored reports
+## Local report corpus
 
-The completed evaluation corpus contains **41 report files**:
+The local evaluation corpus used to derive these tables contains **41 report
+files**:
 
 - 15 raw-policy progression reports: V1, V2, V3 Diverse, V4 Diverse, and V4
   Reformed against Safe Greedy Food on Arena, Cave, and Corridors;
@@ -391,7 +398,7 @@ when each self-play shard pair is treated as one experiment.
   addition to learned Q-values; they are not pure greedy Q-table policies.
 - Last-standing and final survival measure different outcomes and should not be
   used interchangeably.
-- The stored benchmark reports contain aggregate statistics, so the current
+- The local benchmark reports contain aggregate statistics, so the current
   analysis is descriptive rather than a per-episode statistical significance
   study.
 - Evaluation is simulation-based benchmarking, not automated unit testing. Unit

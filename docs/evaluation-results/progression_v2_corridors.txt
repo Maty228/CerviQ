@@ -1,0 +1,57 @@
+CerviQ pairwise evaluation
+===========================
+
+Agent:                  Q-learning V2
+Opponent:               Safe Greedy Food
+Scenario:               Corridors
+Episodes:               1000
+Maximum ticks:          500
+Starting configuration: original two-worm scenario
+Start side:             randomized each episode
+Initial food:           randomized fixed evaluation target
+
+Global episode statistics
+-------------------------
+Average episode length: 445.63
+Average total food:     6.926
+Average total kills:    0.184
+
+Agent: Q-learning V2
+--------------------
+Worm ID:               1
+Average food:          4.030
+Food / 100 ticks:      0.988
+Average age:           408.05
+Median age:            500.00
+P90 age:               500
+Maximum age:           500
+Average kills:         0.104
+Average final length:  7.030
+Maximum final length:  23
+Survival rate:         73.40%
+Last-standing rate:    50.40%
+Wall death rate:       17.30%
+Poison death rate:     0.00%
+Own-body death rate:   1.30%
+Other-body death rate: 8.00%
+Head-to-head rate:     0.00%
+
+Opponent: Safe Greedy Food
+--------------------------
+Worm ID:               2
+Average food:          2.896
+Food / 100 ticks:      1.068
+Average age:           271.19
+Median age:            213.00
+P90 age:               500
+Maximum age:           500
+Average kills:         0.080
+Average final length:  5.896
+Maximum final length:  16
+Survival rate:         35.10%
+Last-standing rate:    14.60%
+Wall death rate:       38.40%
+Poison death rate:     0.00%
+Own-body death rate:   16.10%
+Other-body death rate: 10.40%
+Head-to-head rate:     0.00%

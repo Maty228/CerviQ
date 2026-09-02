@@ -11,7 +11,10 @@ category:            Game
 build-type:          Simple
 
 extra-source-files:  README.md
+                     docs/user-documentation.md
+                     docs/developer-documentation.md
                      docs/experiments.md
+                     docs/images/.gitkeep
 
 
 common cerviq-options
@@ -130,4 +133,4 @@ test-suite cerviq-tests
 
 source-repository head
   type:     git
-  location: https://github.com/githubuser/cerviQ
+  location: https://github.com/Maty228/CerviQ

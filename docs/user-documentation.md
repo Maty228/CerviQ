@@ -35,6 +35,12 @@ with:
 stack build
 ```
 
+Run the automated unit-test suite with:
+
+```text
+stack test
+```
+
 Start the graphical application with:
 
 ```text
@@ -49,10 +55,9 @@ Play and Watch sessions start paused at 3 ticks per second.
 
 The main menu contains **Watch Agents**, **Play vs Agents**, and **Quit**.
 
-> **Screenshot TODO — Main menu**
->
-> Add `docs/images/main-menu.png`.
-> Capture the initial CerviQ menu with Watch Agents, Play vs Agents, and Quit visible.
+![CerviQ main menu showing Watch Agents, Play vs Agents, and Quit.](images/main-menu.png)
+
+*Figure 1: CerviQ main menu. Watch Agents opens AI simulation and diagnostics, while Play vs Agents starts a human-controlled game.*
 
 | Key | Main menu action |
 | --- | --- |
@@ -90,10 +95,9 @@ Added rows initially use **Safe Greedy Food**. The default two-agent setup is
 session assigns the selected controllers to the predefined worms in order and
 gives every worm a stable, distinct color.
 
-> **Screenshot TODO — Multi-worm Watch Agents**
->
-> Add `docs/images/watch-multi-worm.png`.
-> Capture a running Large Cave Watch session with at least six differently colored worms, the two-column agent overview, and off-screen indicators visible.
+![Multi-worm Watch Agents session with several independently controlled worms.](images/watch-multi-worm.png)
+
+*Figure 2: Multi-worm Watch Agents session. Each worm has its own controller and color, while the HUD summarizes the configured roster and current statistics.*
 
 ### Watch controls
 
@@ -134,10 +138,9 @@ tied for the raw maximum. V2-V4 add internal diagnostic values. V4 includes
 action quality, path, robust-space, tail-connectivity, repetition, and known-Q
 information.
 
-> **Screenshot TODO — V4 debug display**
->
-> Add `docs/images/v4-debug-display.png`.
-> Capture Watch Agents with Q-learning V4 Reformed 30k + fallback selected, Debug open for that worm, and the RL state, Q-values, path, tail, repetition, and known-Q fields legible.
+![Q-learning V4 debug view showing the encoded state and decision diagnostics.](images/v4-debug-display.png)
+
+*Figure 3: Debug HUD for Q-learning V4 Reformed 30k + fallback. The panel exposes the encoded RL state, raw Q-values, food-path information, action-quality diagnostics, topology information, repetition state, and known-Q status used to inspect agent decisions.*
 
 For a `+ fallback` controller, **Q best** is not necessarily the action that is
 executed. The display reports unfiltered table maxima, while V3 and V4 fallback
@@ -161,10 +164,9 @@ opponent receives a different roster color. All AI controllers are queried on
 every game tick, and their actions are submitted together with the human action
 to the simultaneous game engine.
 
-> **Screenshot TODO — Play vs Agents**
->
-> Add `docs/images/play-vs-agents.png`.
-> Capture an active match with Worm 1 and at least three differently colored AI opponents, plus the compact opponent roster and alive count.
+![Human-controlled Worm 1 playing against multiple AI opponents.](images/play-vs-agents.png)
+
+*Figure 4: Play vs Agents with multiple AI opponents. Worm 1 is controlled by the player, while every opponent is assigned an independent controller and roster color.*
 
 ### Play controls
 
@@ -296,10 +298,9 @@ selected one. A green **F** arrow points toward the geometrically nearest food
 when it is outside the viewport. This display choice is separate from V4's
 path-aware food analysis.
 
-> **Screenshot TODO — Large-map viewport**
->
-> Add `docs/images/large-cave-viewport.png`.
-> Capture Large Cave with the focused worm visible, at least two colored off-screen worm indicators, and the green F indicator at the viewport edge.
+![Large Cave rendered through the scrolling viewport with off-screen indicators.](images/large-cave-viewport.png)
+
+*Figure 5: Large Cave viewport. The camera follows the focused worm, while colored edge indicators show off-screen living worms and the green F marker indicates food outside the visible region.*
 
 ## 9. Typical workflows
 

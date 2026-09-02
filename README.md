@@ -20,6 +20,8 @@ generations of tabular Q-learning, and reusable training and evaluation code.
   against spawning immediately beside living worm heads.
 - Generic tabular training plus configurable training and pairwise evaluation
   commands using the normal game engine.
+- A Tasty/HUnit suite covering deterministic core rules, multi-worm scenarios,
+  adaptive food, Play outcomes, Q-learning updates, and evaluation bookkeeping.
 
 > **Screenshot TODO — Multi-worm Watch Agents**
 >
@@ -38,6 +40,7 @@ From the repository root:
 
 ```text
 stack build
+stack test
 stack run cerviQ
 ```
 
@@ -99,19 +102,20 @@ so the included trained models were not separately trained for 6-9 worm games.
   architecture, tick rules, multi-worm GUI design, Q-learning evolution, V4
   internals, training, evaluation, persistence, and extension points.
 - [Training and evaluation](docs/experiments.md): configurable commands,
-  output files, pairwise methodology, and stored report provenance.
+  output files, pairwise methodology, and benchmark interpretation.
 
 ## Repository overview
 
 | Path | Responsibility |
 | --- | --- |
-| `src/` | Game engine, scenarios, agents, GUI, training, and evaluation |
+| `src/` | Exposed library: game engine, scenarios, agents, GUI, training, and evaluation |
 | `src/QLearning/` | Generic Q-learning plus V1-V4 designs and diagnostics |
-| `app/` | Final/configurable training and pairwise evaluation entry points |
-| `data/models/` | Persisted text Q-tables and training-statistics outputs |
-| `outputs/evaluation/` | Stored text reports from controlled pairwise runs |
-| `docs/` | User and developer documentation |
-| `cerviQ.cabal` | Executables, modules, dependencies, and package metadata |
+| `app/` | GUI, final/configurable training, and pairwise evaluation entry points |
+| `test/Spec.hs` | Tasty/HUnit automated unit-test suite |
+| `data/models/` | Persisted text Q-tables; trainers can also create local statistics files |
+| `outputs/evaluation/` | Ignored local destination for generated evaluation reports |
+| `docs/` | User, developer, and experiment documentation |
+| `cerviQ.cabal` | Library, executables, test target, dependencies, and package metadata |
 
 ## Current limitations
 
@@ -120,6 +124,8 @@ so the included trained models were not separately trained for 6-9 worm games.
 - Poison is supported by the engine but is absent from the built-in scenarios.
 - Random agents and food spawning have no exposed seed control.
 - Q-tables use derived `Show`/`Read` persistence without schema versioning.
+- Raw reports behind the quantitative experiment summary are local ignored
+  artifacts, not files distributed by the Git repository.
 
 ## License
 

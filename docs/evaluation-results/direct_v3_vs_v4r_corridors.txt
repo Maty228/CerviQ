@@ -1,0 +1,57 @@
+CerviQ pairwise evaluation
+===========================
+
+Agent:                  Q-learning V3 Diverse 30k + fallback
+Opponent:               Q-learning V4 Reformed 30k + fallback
+Scenario:               Corridors
+Episodes:               1000
+Maximum ticks:          500
+Starting configuration: original two-worm scenario
+Start side:             randomized each episode
+Initial food:           randomized fixed evaluation target
+
+Global episode statistics
+-------------------------
+Average episode length: 487.51
+Average total food:     15.544
+Average total kills:    0.121
+
+Agent: Q-learning V3 Diverse 30k + fallback
+-------------------------------------------
+Worm ID:               1
+Average food:          5.467
+Food / 100 ticks:      1.345
+Average age:           406.57
+Median age:            500.00
+P90 age:               500
+Maximum age:           500
+Average kills:         0.039
+Average final length:  8.467
+Maximum final length:  19
+Survival rate:         59.50%
+Last-standing rate:    24.70%
+Wall death rate:       25.80%
+Poison death rate:     0.00%
+Own-body death rate:   6.50%
+Other-body death rate: 8.20%
+Head-to-head rate:     0.00%
+
+Opponent: Q-learning V4 Reformed 30k + fallback
+-----------------------------------------------
+Worm ID:               2
+Average food:          10.077
+Food / 100 ticks:      2.365
+Average age:           426.04
+Median age:            500.00
+P90 age:               500
+Maximum age:           500
+Average kills:         0.082
+Average final length:  13.077
+Maximum final length:  23
+Survival rate:         71.30%
+Last-standing rate:    35.60%
+Wall death rate:       22.80%
+Poison death rate:     0.00%
+Own-body death rate:   2.00%
+Other-body death rate: 3.90%
+Head-to-head rate:     0.00%
