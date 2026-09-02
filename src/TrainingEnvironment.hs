@@ -7,6 +7,11 @@ and initial food positions used by diverse Q-learning training. It implements
 weighted random selection and produces 'TrainingEpisodeSetup' values consumed
 by the generic trainer in "Training".
 
+The current sampler deliberately constructs each scenario with only its two
+default worms. Controller assignment is generic over all non-controlled worm
+IDs, but the supplied final training configuration is therefore one-versus-one
+and does not use the additional interactive starts.
+
 Keeping environment sampling outside the training loop allows the same generic
 Q-learning implementation to be trained under either fixed or varied
 conditions.

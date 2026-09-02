@@ -295,7 +295,9 @@ actionForFirstStep worm position =
 --
 -- Each BFS queue item stores the current position, the first position taken
 -- from the worm's head, and the path length. Once food is reached, that first
--- position is converted back into the corresponding relative 'Action'.
+-- position is converted back into the corresponding relative 'Action'. The
+-- initial queue contains only the three legal relative-action destinations, so
+-- a path can never begin with an impossible 180-degree reversal.
 foodPathInfoWithContext :: SearchContext -> Worm -> Maybe (Action, Int)
 foodPathInfoWithContext context worm =
     search initialQueue initialVisited
@@ -304,7 +306,8 @@ foodPathInfoWithContext context worm =
 
     initialSteps =
         [ position
-        | position <- neighbours startPosition
+        | action <- allActions
+        , let position = headAfterAction worm action
         , not (isSearchBlocked context position)
         ]
 

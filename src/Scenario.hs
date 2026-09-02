@@ -42,24 +42,25 @@ data Scenario = Scenario
 
         -- | Default worms placed on the map.
         --
-        -- Existing Play, training, and evaluation code uses this list directly,
-        -- preserving the original two-worm scenarios.
+        -- Training, evaluation, and compatibility constructors use this list,
+        -- preserving the original two-worm experiment environments.
         scenarioWorms :: [Worm],
 
-        -- | Additional predefined worm starts available to multi-worm modes.
+        -- | Additional predefined worm starts available to interactive modes.
         --
-        -- These worms are not included by 'scenarioInitialState'. Watch mode can
-        -- request them explicitly through 'scenarioInitialStateForWormCount'.
-        scenarioExtraWorms :: [Worm]
+        -- These worms are not included by 'scenarioInitialState'. Watch Agents
+        -- and Play vs Agents request them through
+        -- 'scenarioInitialStateForWormCount'.
+        scenarioExtraWorms :: [Worm],
 
-                -- | Minimum food target used by interactive games on this scenario.
+        -- | Minimum food target used by interactive games on this scenario.
         --
         -- Training and evaluation may deliberately use their own fixed food
         -- configuration instead.
-        , scenarioBaseFoodCount :: Int
+        scenarioBaseFoodCount :: Int,
 
         -- | Upper bound on the interactive food target as more worms are added.
-        , scenarioMaximumFoodCount :: Int
+        scenarioMaximumFoodCount :: Int
     }
     deriving (Show, Eq)
 
@@ -214,7 +215,7 @@ initialStateWithWorms scenario worms =
 -- | Builds the default initial game state represented by a scenario.
 --
 -- Only 'scenarioWorms' are used here. This deliberately preserves the original
--- two-worm behaviour used by Play mode, training, and evaluation.
+-- two-worm behaviour used by training, evaluation, and compatibility callers.
 scenarioInitialState :: Scenario -> GameState
 scenarioInitialState scenario =
     case validateScenario scenario of
@@ -238,8 +239,18 @@ scenarioInitialStateForWormCount :: Int -> Scenario -> Maybe GameState
 scenarioInitialStateForWormCount wormCount scenario
     | wormCount <= 0 = Nothing
     | wormCount > scenarioMaximumWormCount scenario = Nothing
+    | not (null validationErrors) =
+        error
+            ( "Invalid scenario \""
+                ++ scenarioName scenario
+                ++ "\":\n"
+                ++ unlines (map ("  - " ++) validationErrors)
+            )
     | otherwise =
         Just $
             initialStateWithWorms
                 scenario
                 (take wormCount (scenarioAvailableWorms scenario))
+  where
+    validationErrors =
+        validateScenario scenario

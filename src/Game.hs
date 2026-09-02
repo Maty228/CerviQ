@@ -311,7 +311,9 @@ resetHeadHistory state =
 
 -- | Prepends each worm's current head to its stored history.
 --
--- Only the most recent 'headHistoryLimit' positions are retained.
+-- Only the most recent 'headHistoryLimit' positions are retained. The caller
+-- supplies both living and dead worms, so a dead worm's final head continues to
+-- be recorded on later global ticks while another worm remains alive.
 recordHeadHistory :: [Worm] -> Map.Map Int [Position] -> Map.Map Int [Position]
 recordHeadHistory worms history =
     foldr recordWorm history worms

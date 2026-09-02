@@ -142,7 +142,9 @@ episodeRunning maxTicks state =
 --
 -- Controller actions are processed through the normal simultaneous game engine.
 -- Death reasons are taken from 'stepGameDetailed', while food is replenished
--- after every simulated tick using the normal food-spawning logic.
+-- after every simulated tick using the normal food-spawning logic. Existing
+-- authored food is not cleared: 'maxFoodCount' is a minimum replenishment
+-- threshold here rather than an exact initial count.
 runEpisode :: Int -> [(Int, Controller)] -> GameState -> IO EpisodeResult
 runEpisode maxTicks assignedControllers initialState = do
     stateWithFood <- maintainFoodCount maxFoodCount initialState

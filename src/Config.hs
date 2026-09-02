@@ -26,8 +26,8 @@ playerWormId :: Int
 playerWormId = 1
 
 
--- | Default fixed food target used by training, evaluation, and compatibility
--- constructors.
+-- | Default fixed food target used by training and compatibility constructors,
+-- and the minimum replenishment threshold used by evaluation.
 --
 -- Interactive Watch and Play games compute their own target from the selected
 -- scenario and configured worm count.
