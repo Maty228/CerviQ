@@ -23,10 +23,10 @@ generations of tabular Q-learning, and reusable training and evaluation code.
 - A Tasty/HUnit suite covering deterministic core rules, multi-worm scenarios,
   adaptive food, Play outcomes, Q-learning updates, and evaluation bookkeeping.
 
-> **Screenshot TODO — Multi-worm Watch Agents**
->
-> Add `docs/images/watch-multi-worm.png`.
-> Capture a running Large Cave Watch session with at least six differently colored worms, the two-column agent overview, and off-screen indicators visible.
+
+![Multi-worm Watch Agents session with several independently controlled worms.](images/watch-multi-worm.png)
+
+*Figure 2: Multi-worm Watch Agents session. Each worm has its own controller and color, while the HUD summarizes the configured roster and current statistics.*
 
 ## Quick start
 
