@@ -24,7 +24,7 @@ generations of tabular Q-learning, and reusable training and evaluation code.
   adaptive food, Play outcomes, Q-learning updates, and evaluation bookkeeping.
 
 
-![Multi-worm Watch Agents session with several independently controlled worms.](images/watch-multi-worm.png)
+![Multi-worm Watch Agents session with several independently controlled worms.](docs/images/watch-multi-worm.png)
 
 *Figure 2: Multi-worm Watch Agents session. Each worm has its own controller and color, while the HUD summarizes the configured roster and current statistics.*
 
