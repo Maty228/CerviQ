@@ -155,13 +155,7 @@ stepEnvironment spec controlledId action state =
 --
 -- Any opponent assignment for the controlled worm itself is ignored so the
 -- explicitly supplied learning action always takes precedence.
-stepEnvironmentWithOpponents
-    :: QLearningSpec state
-    -> Int
-    -> Action
-    -> [(Int, Controller)]
-    -> GameState
-    -> IO (RlStep state)
+stepEnvironmentWithOpponents :: QLearningSpec state -> Int -> Action -> [(Int, Controller)] -> GameState -> IO (RlStep state)
 stepEnvironmentWithOpponents spec controlledId action opponentControllers state =
     case controlledWorm controlledId state of
         Nothing ->
@@ -293,16 +287,7 @@ chooseActionEpsilonGreedy epsilon table state = do
 --
 -- For terminal transitions 'nextState' is 'Nothing', so the future value is
 -- zero and the update depends only on the observed terminal reward.
-updateQValue
-    :: Ord state
-    => Double
-    -> Double
-    -> state
-    -> Action
-    -> Double
-    -> Maybe state
-    -> QTable state
-    -> QTable state
+updateQValue :: Ord state => Double -> Double -> state -> Action -> Double -> Maybe state -> QTable state -> QTable state
 updateQValue alpha gamma state action reward nextState table =
     setQValue state action newValue table
   where

@@ -120,15 +120,10 @@ removeTail (segment : rest) =
 advanceBody :: Bool -> Position -> [Position] -> [Position]
 advanceBody grows newHead oldBody =
     case oldBody of
-        []
-            -> [newHead]
-
+        []  -> [newHead]
         _
-            | grows ->
-                newHead : oldBody
-
-            | otherwise ->
-                newHead : removeTail oldBody
+            | grows -> newHead : oldBody
+            | otherwise -> newHead : removeTail oldBody
 
 
 -- | Moves a worm one cell forward without changing its current direction.

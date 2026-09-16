@@ -48,12 +48,7 @@ type AgentDebugProvider = GameState -> Worm -> AgentDebugInfo
 -- The version supplies only a function describing its encoded state. State
 -- encoding and Q-table queries are performed through the shared Q-learning
 -- specification and table.
-makeQDebugProvider
-    :: Ord state
-    => Core.QLearningSpec state
-    -> (state -> [(String, String)])
-    -> Core.QTable state
-    -> AgentDebugProvider
+makeQDebugProvider :: Ord state => Core.QLearningSpec state -> (state -> [(String, String)]) -> Core.QTable state -> AgentDebugProvider
 makeQDebugProvider spec describeState table gameState worm =
     AgentDebugInfo
         { debugStateLines = describeState rlState

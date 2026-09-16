@@ -112,15 +112,9 @@ manhattanDistance (x1, y1) (x2, y2) =
 farEnoughFromLivingWorms :: GameState -> Position -> Bool
 farEnoughFromLivingWorms state pos =
     all
-        (\headPos -> manhattanDistance pos headPos >= interactiveFoodHeadDistance)
-        livingHeads
+        (\headPos -> manhattanDistance pos headPos >= interactiveFoodHeadDistance) livingHeads
   where
-    livingHeads =
-        [ headPos
-        | worm <- gameWorms state
-        , wormAlive worm
-        , headPos : _ <- [wormBody worm]
-        ]
+    livingHeads = [ headPos | worm <- gameWorms state , wormAlive worm , headPos : _ <- [wormBody worm] ]
 
 
 -- | Returns a random valid food position that preferably avoids living worms.
@@ -132,11 +126,9 @@ randomFoodPositionAwayFromWorms :: GameState -> IO (Maybe Position)
 randomFoodPositionAwayFromWorms state =
     chooseRandom candidatePositions
   where
-    freePositions =
-        freeFoodPositions state
+    freePositions = freeFoodPositions state
 
-    preferredPositions =
-        filter (farEnoughFromLivingWorms state) freePositions
+    preferredPositions = filter (farEnoughFromLivingWorms state) freePositions
 
     candidatePositions =
         if null preferredPositions

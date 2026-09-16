@@ -589,12 +589,7 @@ qualityFromArea forced worm area
 --
 -- In addition, the analysis records tail connectivity, path distance to food,
 -- and recent movement repetition for use by the V4 fallback policy.
-analyzeActionWithContext
-    :: ActionAnalysisContext
-    -> GameState
-    -> Worm
-    -> Action
-    -> ActionAnalysis
+analyzeActionWithContext :: ActionAnalysisContext -> GameState -> Worm -> Action -> ActionAnalysis
 analyzeActionWithContext context state worm action
     | action `notElem` currentSafeActions =
         analysisWithoutFuture Fatal
@@ -964,10 +959,7 @@ preferTailConnected analyses
 --
 -- This helper is used by loop breaking to progressively narrow candidates
 -- while preserving ties.
-preferMinimumBy
-    :: (ActionAnalysis -> Int)
-    -> [(Action, ActionAnalysis)]
-    -> [(Action, ActionAnalysis)]
+preferMinimumBy :: (ActionAnalysis -> Int) -> [(Action, ActionAnalysis)] -> [(Action, ActionAnalysis)]
 preferMinimumBy _ [] =
     []
 
@@ -986,10 +978,7 @@ preferMinimumBy selector analyses =
 -- tied, recent destination visits are used as a secondary criterion.
 --
 -- When no loop is detected, candidates are returned unchanged.
-preferLoopBreaking
-    :: LoopStatus
-    -> [(Action, ActionAnalysis)]
-    -> [(Action, ActionAnalysis)]
+preferLoopBreaking :: LoopStatus -> [(Action, ActionAnalysis)] -> [(Action, ActionAnalysis)]
 preferLoopBreaking NotRepeating analyses =
     analyses
 

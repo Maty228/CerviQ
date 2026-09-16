@@ -174,8 +174,7 @@ runEpisode maxTicks assignedControllers initialState = do
             stateWithFood <- maintainFoodCount maxFoodCount steppedState
             runLoop stateWithFood updatedLastStandingIds updatedDeaths
       where
-        updatedLastStandingIds =
-            recordLastStandingWorm state lastStandingIds
+        updatedLastStandingIds = recordLastStandingWorm state lastStandingIds
 
 
 -- | Runs multiple independent episodes from the same initial game state.
